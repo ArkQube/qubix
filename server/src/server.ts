@@ -339,11 +339,12 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
       if (roomData) {
         const parsedRoom = JSON.parse(roomData);
         if (parsedRoom.code === upperCode) {
-          room = {
+          const newRoom: ServerRoom = {
             ...parsedRoom,
             participants: new Set(parsedRoom.participants || []),
           };
-          rooms.set(parsedRoom.id, room);
+          room = newRoom;
+          rooms.set(parsedRoom.id, newRoom);
           break;
         }
       }

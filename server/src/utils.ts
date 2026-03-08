@@ -1,6 +1,6 @@
 // Server-side utility functions for Cubix
 
-import { USERNAME_ADJECTIVES, USERNAME_NOUNS } from './types';
+// Server-side utility functions for Cubix
 
 // Generate random anonymous username
 export function generateAnonymousUsername(): string {
@@ -58,12 +58,12 @@ export function formatTime(timestamp: number): string {
 export function getTimeRemaining(expiresAt: number): string {
   const now = Date.now();
   const diff = expiresAt - now;
-  
+
   if (diff <= 0) return 'Expired';
-  
+
   const minutes = Math.floor(diff / (60 * 1000));
   const hours = Math.floor(minutes / 60);
-  
+
   if (hours > 0) {
     return `${hours}h ${minutes % 60}m`;
   }
