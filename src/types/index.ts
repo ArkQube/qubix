@@ -57,7 +57,7 @@ export interface WebSocketMessage {
   timestamp: number;
 }
 
-export type MessageType = 
+export type MessageType =
   | 'auth'
   | 'message'
   | 'join_room'
@@ -92,8 +92,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   messageLifetime: 60 * 60 * 1000, // 1 hour
   roomLifetime: 12 * 60 * 60 * 1000, // 12 hours
   fileLifetime: 60 * 60 * 1000, // 1 hour
-  wsUrl: import.meta.env.VITE_WS_URL || 'ws://localhost:3001',
-  apiUrl: import.meta.env.VITE_API_URL || 'http://localhost:3001',
+  wsUrl: import.meta.env.VITE_WS_URL || 'wss://qubix-rr27.onrender.com/ws',
+  apiUrl: import.meta.env.VITE_API_URL || 'https://qubix-rr27.onrender.com',
 };
 
 // Anonymous username adjectives and nouns for random generation
