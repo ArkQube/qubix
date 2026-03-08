@@ -1,6 +1,6 @@
-// Server-side utility functions for Cubix
+// Server-side utility functions for Arkion
 
-// Server-side utility functions for Cubix
+// Server-side utility functions for Arkion
 
 // Generate random anonymous username
 export function generateAnonymousUsername(): string {

@@ -38,7 +38,7 @@ export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
           <img src="/qchat.svg" alt="QChat Logo" className="w-12 h-12 pointer-events-none drop-shadow-lg" />
 
           <div className="flex flex-col justify-center gap-0.5">
-            <h1 className="font-bold text-[26px] tracking-tight leading-none text-foreground">Qubix</h1>
+            <h1 className="font-bold text-[26px] tracking-tight leading-none text-foreground">Arkion</h1>
             <span className="text-[11px] text-primary font-bold uppercase tracking-[0.2em] leading-none">by arkqube</span>
           </div>
         </div>

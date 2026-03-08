@@ -43,7 +43,7 @@ function AppContent() {
 
                   {/* Typography Branding */}
                   <div className="flex flex-col items-start leading-none gap-0.5">
-                    <h1 className="font-bold text-[22px] text-foreground tracking-tight">Qubix</h1>
+                    <h1 className="font-bold text-[22px] text-foreground tracking-tight">Arkion</h1>
                     <span className="text-[10px] text-primary font-bold uppercase tracking-[0.2em]">by arkqube</span>
                   </div>
                 </div>

@@ -1,4 +1,4 @@
-// Cubix - Ephemeral Real-Time Communication Platform
+// Arkion - Ephemeral Real-Time Communication Platform
 // Type Definitions
 
 export interface User {

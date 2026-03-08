@@ -1,4 +1,4 @@
-// Server-side type definitions for Cubix
+// Server-side type definitions for Arkion
 
 export interface ServerUser {
   id: string;

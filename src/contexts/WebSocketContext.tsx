@@ -44,7 +44,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sessionId = useRef<string>(localStorage.getItem('cubix_session_id') || generateSessionId());
+  const sessionId = useRef<string>(localStorage.getItem('arkion_session_id') || generateSessionId());
 
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -58,7 +58,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
   // Store session ID
   useEffect(() => {
-    localStorage.setItem('cubix_session_id', sessionId.current);
+    localStorage.setItem('arkion_session_id', sessionId.current);
   }, []);
 
   // Auto-remove expired messages
@@ -100,7 +100,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           type: 'auth',
           payload: {
             sessionId: sessionId.current,
-            username: localStorage.getItem('cubix_username') || generateAnonymousUsername(),
+            username: localStorage.getItem('arkion_username') || generateAnonymousUsername(),
           },
         });
 
@@ -195,7 +195,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     switch (type) {
       case 'auth_success':
         setCurrentUser(payload.user);
-        localStorage.setItem('cubix_username', payload.user.username);
+        localStorage.setItem('arkion_username', payload.user.username);
         break;
 
       case 'auth_error':
@@ -394,7 +394,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
   // Set username
   const setUsername = useCallback((username: string) => {
-    localStorage.setItem('cubix_username', username);
+    localStorage.setItem('arkion_username', username);
     // Reconnect with new username
     disconnect();
     connect();

@@ -1,4 +1,4 @@
-// Cubix Server - Ephemeral Real-Time Communication Platform
+// Arkion Server - Ephemeral Real-Time Communication Platform
 import express from 'express';
 import { createServer } from 'http';
 import https from 'https';
@@ -875,7 +875,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           resource_type: 'auto',
-          folder: 'cubix-uploads',
+          folder: 'arkion-uploads',
           expires_at: Math.floor(Date.now() / 1000) + EXPIRATION_TIMES.file,
         },
         (err, result) => {
@@ -932,7 +932,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 // Get server info
 app.get('/api/info', (req, res) => {
   res.json({
-    name: 'Cubix Server',
+    name: 'Arkion Server',
     version: '2.0.0',
     maxFileSize: 10 * 1024 * 1024,
     messageLifetime: EXPIRATION_TIMES.globalMessage,
@@ -946,7 +946,7 @@ app.get('/api/info', (req, res) => {
 // Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`Cubix Server running on port ${PORT}`);
+  console.log(`Arkion Server running on port ${PORT}`);
   console.log(`WebSocket server ready at ws://localhost:${PORT}/ws`);
 });
 

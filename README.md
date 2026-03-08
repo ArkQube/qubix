@@ -1,6 +1,6 @@
-# Qubix by arkqube
+# Arkion by arkqube
 
-Qubix is a privacy-first, ephemeral real-time communication platform enabling temporary and anonymous messaging. Designed with a sleek, modern UI, it offers global chat rooms and secure private rooms without requiring user accounts or persisting permanent data.
+Arkion is a privacy-first, ephemeral real-time communication platform enabling temporary and anonymous messaging. Designed with a sleek, modern UI, it offers global chat rooms and secure private rooms without requiring user accounts or persisting permanent data.
 
 ## 🚀 Features
 
@@ -13,7 +13,7 @@ Qubix is a privacy-first, ephemeral real-time communication platform enabling te
 
 ## 🏗️ Architecture
 
-The Qubix application follows a decoupled client-server architecture:
+The Arkion application follows a decoupled client-server architecture:
 
 ### Frontend (React + Vite + TypeScript)
 The client-side application handles all user interactions, UI rendering, and WebSocket connections.
@@ -38,7 +38,7 @@ A high-performance Node.js server acts as the central hub for all real-time mess
 
 ## ⚙️ Local Development Setup
 
-To run Qubix locally, you will need concurrently running terminals for the Frontend and the Backend.
+To run Arkion locally, you will need concurrently running terminals for the Frontend and the Backend.
 
 ### Prerequisites
 *   Node.js (v18+ recommended)
@@ -100,7 +100,7 @@ To run Qubix locally, you will need concurrently running terminals for the Front
 
 ## 🌐 Deployment Workflow
 
-To take Qubix live, you must deploy the Backend and Frontend to separate cloud hosting providers.
+To take Arkion live, you must deploy the Backend and Frontend to separate cloud hosting providers.
 
 ### 1. Deploying the Backend (Engine)
 Because the backend relies on persistent WebSocket connections, a platform like [Render.com](https://render.com) is recommended.

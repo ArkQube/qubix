@@ -1,7 +1,7 @@
 {
-  "name": "cubix-server",
+  "name": "arkion-server",
   "version": "2.0.0",
-  "description": "Cubix Ephemeral Real-Time Communication Platform - Server",
+  "description": "Arkion Ephemeral Real-Time Communication Platform - Server",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
