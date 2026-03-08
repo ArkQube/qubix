@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { WebSocketProvider } from '@/contexts/WebSocketContext';
+import { WebSocketProvider, useWebSocket } from '@/contexts/WebSocketContext';
 import { LandingPage } from '@/components/ui/LandingPage';
 import { AppSidebar } from '@/components/ui/AppSidebar';
 import { ChatContainer } from '@/components/chat/ChatContainer';
@@ -15,6 +15,7 @@ import './App.css';
 function AppContent() {
   const [showLanding, setShowLanding] = useState(false);
   const [activeTab, setActiveTab] = useState('chat');
+  const { connected } = useWebSocket();
 
   const handleEnterChat = () => {
     setShowLanding(false);
@@ -34,7 +35,7 @@ function AppContent() {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Mobile Header (Only visible on small screens) */}
-        <div className="md:hidden flex items-center p-4 border-b bg-background shadow-sm z-10 relative">
+        <div className="md:hidden flex items-center justify-between p-4 border-b bg-background shadow-sm z-10 relative">
           <Sheet>
             <SheetTrigger asChild>
               <Button variant="ghost" className="p-1 -ml-2 hover:bg-transparent flex items-center gap-3 active:scale-95 transition-transform">
@@ -66,6 +67,17 @@ function AppContent() {
               </SheetClose>
             </SheetContent>
           </Sheet>
+
+          {/* Mobile Connection Status Indicator */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted/50 border shadow-sm">
+            <span className="relative flex h-2.5 w-2.5">
+              {connected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${connected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+            </span>
+            <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+              {connected ? 'Online' : 'Offline'}
+            </span>
+          </div>
         </div>
 
         <AnimatePresence mode="wait">
