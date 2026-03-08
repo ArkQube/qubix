@@ -92,8 +92,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   messageLifetime: 60 * 60 * 1000, // 1 hour
   roomLifetime: 12 * 60 * 60 * 1000, // 12 hours
   fileLifetime: 60 * 60 * 1000, // 1 hour
-  wsUrl: 'wss://qubix-rr27.onrender.com/ws',
-  apiUrl: 'https://qubix-rr27.onrender.com',
+  wsUrl: 'wss://Arkion-rr27.onrender.com/ws',
+  apiUrl: 'https://Arkion-rr27.onrender.com',
 };
 
 // Anonymous username adjectives and nouns for random generation

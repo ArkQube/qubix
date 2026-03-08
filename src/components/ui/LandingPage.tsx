@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { 
-  Zap, 
-  Shield, 
-  Clock, 
-  Users, 
-  FileUp, 
-  Lock, 
+import {
+  Zap,
+  Shield,
+  Clock,
+  Users,
+  FileUp,
+  Lock,
   MessageSquare,
   ArrowRight,
   CheckCircle2,
   Sparkles,
-  Eye
+  Eye,
+  Hexagon
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -71,7 +72,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
   ];
 
   return (
-    <div className="min-h-screen bg-background relative overflow-hidden">
+    <div className="min-h-[100dvh] w-full bg-background relative overflow-hidden">
       {/* Animated Background */}
       <div className="absolute inset-0 overflow-hidden">
         {/* Gradient Orbs */}
@@ -93,9 +94,9 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
         />
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl" />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl" />
-        
+
         {/* Grid Pattern */}
-        <div 
+        <div
           className="absolute inset-0 opacity-[0.03]"
           style={{
             backgroundImage: `linear-gradient(hsl(var(--primary)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--primary)) 1px, transparent 1px)`,
@@ -110,8 +111,8 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
         <header className="border-b bg-background/80 backdrop-blur-md sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
-                <Zap className="w-5 h-5 text-primary-foreground" />
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-lg">
+                <Hexagon className="w-5 h-5 text-primary-foreground fill-primary-foreground/20" />
               </div>
               <span className="font-bold text-xl">Arkion</span>
             </div>

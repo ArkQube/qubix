@@ -112,14 +112,14 @@ Because the backend relies on persistent WebSocket connections, a platform like 
 5. Set **Build Command** to `npm install && npm run build`.
 6. Set **Start Command** to `npm start`.
 7. Go to the "Environment" tab and add all the variables from your local `.env` file (Redis and Cloudinary keys).
-8. Deploy. Render will provide a live URL (e.g., `https://qubix-api.onrender.com`).
+8. Deploy. Render will provide a live URL (e.g., `https://Arkion-api.onrender.com`).
 
 ### 2. Connecting Frontend to the Live Backend
 Before deploying the frontend, update `src/types.ts` to point to the newly deployed Render backend:
 ```typescript
 export const DEFAULT_CONFIG = {
-  wsUrl: 'wss://qubix-api.onrender.com/ws', // Note the 'wss://' for secure WebSockets
-  apiUrl: 'https://qubix-api.onrender.com',
+  wsUrl: 'wss://Arkion-api.onrender.com/ws', // Note the 'wss://' for secure WebSockets
+  apiUrl: 'https://Arkion-api.onrender.com',
   // ...
 };
 ```
@@ -134,4 +134,4 @@ The React/Vite app is a static site and can be hosted easily on platforms like [
 4. Leave the **Root Directory** empty (as `./` the root).
 5. Click **Deploy**.
 
-Vercel will provide a scalable, live web URL (e.g., `https://qubix-chat.vercel.app`). Your ephemeral chat platform is now live!
+Vercel will provide a scalable, live web URL (e.g., `https://Arkion-chat.vercel.app`). Your ephemeral chat platform is now live!

@@ -8,7 +8,8 @@ import {
   Shield,
   Clock,
   Globe,
-  Lock
+  Lock,
+  Hexagon
 } from 'lucide-react';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { DEFAULT_CONFIG } from '@/types';
@@ -34,8 +35,9 @@ export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
       {/* Text-Based SVG Logo */}
       <div className="p-5 border-b bg-gradient-to-b from-primary/5 to-transparent">
         <div className="flex items-center gap-3">
-          {/* Custom QChat Logo */}
-          <img src="/qchat.svg" alt="QChat Logo" className="w-12 h-12 pointer-events-none drop-shadow-lg" />
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-lg">
+            <Hexagon className="w-6 h-6 text-primary-foreground fill-primary-foreground/20" />
+          </div>
 
           <div className="flex flex-col justify-center gap-0.5">
             <h1 className="font-bold text-[26px] tracking-tight leading-none text-foreground">Arkion</h1>

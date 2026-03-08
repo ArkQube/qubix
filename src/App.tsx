@@ -9,6 +9,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription, SheetClose } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Hexagon } from 'lucide-react';
 import './App.css';
 
 function AppContent() {
@@ -24,7 +25,7 @@ function AppContent() {
   }
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-background">
       {/* Desktop Sidebar */}
       <div className="hidden md:flex h-full">
         <AppSidebar activeTab={activeTab} onTabChange={setActiveTab} />
@@ -38,8 +39,9 @@ function AppContent() {
             <SheetTrigger asChild>
               <Button variant="ghost" className="p-1 -ml-2 hover:bg-transparent flex items-center gap-3 active:scale-95 transition-transform">
                 <div className="flex items-center gap-3 bg-gradient-to-r from-primary/10 to-transparent p-1.5 pr-4 rounded-xl">
-                  {/* Custom QChat Logo */}
-                  <img src="/qchat.svg" alt="QChat Logo" className="w-9 h-9 pointer-events-none drop-shadow-sm" />
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-lg">
+                    <Hexagon className="w-5 h-5 text-primary-foreground fill-primary-foreground/20" />
+                  </div>
 
                   {/* Typography Branding */}
                   <div className="flex flex-col items-start leading-none gap-0.5">
