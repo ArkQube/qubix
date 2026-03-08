@@ -2,6 +2,7 @@
 import express from 'express';
 import { createServer } from 'http';
 import https from 'https';
+import { URL } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
 import axios from 'axios';
@@ -66,10 +67,21 @@ redis.on('connect', () => {
 });
 
 // Initialize WebSocket server
-const wss = new WebSocketServer({
-  server,
-  path: '/ws',
-  perMessageDeflate: false,
+const wss = new WebSocketServer({ noServer: true });
+
+// Handle WebSocket upgrade requests explicitly
+server.on('upgrade', (request, socket, head) => {
+  // We can add origin checking here if strictly needed,
+  // but for now we accept to fix Vercel CORS drops.
+  const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+
+  if (pathname === '/ws') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
 });
 
 // Store connected clients
