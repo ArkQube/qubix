@@ -11,6 +11,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import Redis from 'ioredis';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
+import cron from 'node-cron';
 
 import {
   ServerUser,
@@ -941,9 +942,10 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// Get server info
-app.get('/api/info', (req, res) => {
+// API route to check server status
+app.get('/api/info', (_, res) => {
   res.json({
+    status: 'online',
     name: 'Arkion Server',
     version: '2.0.0',
     maxFileSize: 10 * 1024 * 1024,
@@ -955,11 +957,32 @@ app.get('/api/info', (req, res) => {
   });
 });
 
-// Start server
-const PORT = process.env.PORT || 3001;
+// Cleanup expired data periodically
+setInterval(async () => {
+  try {
+    // In a real app we would have a function here, but we rely on Redis TTL mostly
+  } catch (err) {
+    console.error(err);
+  }
+}, 60 * 1000); // Check every minute
+
+// --- RENDER KEEP-ALIVE CRON ---
+// Prevent the free-tier Render server from sleeping
+cron.schedule('*/10 * * * *', async () => {
+  try {
+    const url = 'https://qubix-rr27.onrender.com/api/info';
+    await axios.get(url);
+    console.log('[KEEP-ALIVE] Pinged self successfully.');
+  } catch (err: any) {
+    console.error('[KEEP-ALIVE] Ping failed:', err.message);
+  }
+});
+
+// Start the server
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Arkion Server running on port ${PORT}`);
-  console.log(`WebSocket server ready at ws://localhost:${PORT}/ws`);
+  console.log(`WebSocket server ready at /ws`);
 });
 
 // Graceful shutdown
