@@ -942,6 +942,33 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+// Proxy file downloads to enforce Content-Disposition: attachment for all files
+app.get('/api/download', async (req, res) => {
+  const fileUrl = req.query.url as string;
+  const fileName = req.query.name as string;
+
+  if (!fileUrl || !fileName) {
+    res.status(400).send('Missing url or name parameters');
+    return;
+  }
+
+  try {
+    const response = await axios({
+      url: fileUrl,
+      method: 'GET',
+      responseType: 'stream',
+    });
+
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Type', response.headers['content-type']);
+
+    response.data.pipe(res);
+  } catch (error) {
+    console.error('Error proxying download:', error);
+    res.status(500).send('Failed to download file');
+  }
+});
+
 // API route to check server status
 app.get('/api/info', (_, res) => {
   res.json({
