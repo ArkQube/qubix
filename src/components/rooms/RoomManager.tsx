@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog';
 import { Plus, Lock, Users, LogOut, Copy, Check, Globe, Share2, Hash } from 'lucide-react';
 import { validateRoomCode, validatePIN } from '@/lib/utils';
+import { useWebSocket } from '@/contexts/WebSocketContext';
 
 interface RoomManagerProps {
   currentRoom: { id: string; code: string; name?: string; hasPin?: boolean; expiresAt: number } | null;
@@ -24,6 +25,9 @@ interface RoomManagerProps {
 }
 
 export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom }: RoomManagerProps) {
+  const { roomParticipants } = useWebSocket();
+  const participantCount = currentRoom ? roomParticipants.length : 'Global';
+
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
@@ -81,7 +85,7 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
 
   return (
     <div className="border-b bg-background/95 backdrop-blur-sm sticky top-0 z-10">
-      <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+      <div className="px-3 py-2 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
 
         {/* Left: Mode indicator */}
         <div className="flex items-center gap-2">
@@ -92,7 +96,10 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-sm">{currentRoom.name || `Room ${currentRoom.code}`}</span>
+                  <span className="font-semibold text-sm whitespace-nowrap">{currentRoom.name || `Room ${currentRoom.code}`}</span>
+                  <span className="sm:hidden text-xs text-muted-foreground whitespace-nowrap px-1.5 py-0.5 bg-muted rounded-md flex items-center gap-1">
+                    <Users className="w-3 h-3" /> {participantCount}
+                  </span>
                   {currentRoom.hasPin && (
                     <Badge variant="secondary" className="text-xs px-1.5 py-0 h-5">
                       <Lock className="w-3 h-3 mr-1" />PIN
@@ -107,12 +114,17 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                <Globe className="w-4 h-4 text-primary" />
+              <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+                <Globe className="w-3.5 h-3.5 text-primary" />
               </div>
               <div>
-                <span className="font-semibold text-sm">Global Chat</span>
-                <p className="text-xs text-muted-foreground">Public · Messages expire in 1 hour</p>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-sm whitespace-nowrap">Global Chat</span>
+                  <span className="sm:hidden text-xs text-muted-foreground whitespace-nowrap px-1.5 py-0.5 bg-muted/50 rounded-md flex items-center gap-1">
+                    <Users className="w-3 h-3" /> {participantCount}
+                  </span>
+                </div>
+                <p className="hidden sm:block text-xs text-muted-foreground">Public · Messages expire in 1 hour</p>
               </div>
             </div>
           )}
@@ -137,10 +149,10 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
           {/* Create Private Room */}
           <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant={currentRoom ? 'ghost' : 'outline'} size="sm" className="gap-1.5">
-                <Plus className="w-4 h-4" />
+              <Button variant={currentRoom ? 'ghost' : 'outline'} size="sm" className="h-8 gap-1.5 px-2.5">
+                <Plus className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Create Room</span>
-                <span className="sm:hidden">Create</span>
+                <span className="sm:hidden text-xs">Create</span>
               </Button>
             </DialogTrigger>
             <DialogContent>
@@ -189,10 +201,10 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
           {/* Join Room */}
           <Dialog open={joinDialogOpen} onOpenChange={setJoinDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant={currentRoom ? 'ghost' : 'default'} size="sm" className="gap-1.5">
-                <Users className="w-4 h-4" />
+              <Button variant={currentRoom ? 'ghost' : 'default'} size="sm" className="h-8 gap-1.5 px-2.5">
+                <Users className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Join Room</span>
-                <span className="sm:hidden">Join</span>
+                <span className="sm:hidden text-xs">Join</span>
               </Button>
             </DialogTrigger>
             <DialogContent>

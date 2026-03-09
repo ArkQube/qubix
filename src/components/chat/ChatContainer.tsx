@@ -99,8 +99,8 @@ export function ChatContainer() {
         onLeaveRoom={leaveRoom}
       />
 
-      {/* Chat Header */}
-      <div className="px-4 py-2 border-b flex items-center justify-between bg-background/50">
+      {/* Chat Header - Hidden on mobile to save space, visible on large screens */}
+      <div className="hidden sm:flex px-4 py-2 border-b items-center justify-between bg-background/50">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Users className="w-4 h-4" />

@@ -35,19 +35,18 @@ function AppContent() {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Mobile Header (Only visible on small screens) */}
-        <div className="md:hidden flex items-center justify-between p-4 border-b bg-background shadow-sm z-10 relative">
+        <div className="md:hidden flex items-center justify-between px-3 py-2 border-b bg-background shadow-sm z-10 relative">
           <Sheet>
             <SheetTrigger asChild>
-              <Button variant="ghost" className="p-1 -ml-2 hover:bg-transparent flex items-center gap-3 active:scale-95 transition-transform">
-                <div className="flex items-center gap-3 bg-gradient-to-r from-primary/10 to-transparent p-1.5 pr-4 rounded-xl">
-                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-lg">
-                    <Hexagon className="w-5 h-5 text-primary-foreground fill-primary-foreground/20" />
+              <Button variant="ghost" className="p-1 -ml-2 hover:bg-transparent flex items-center gap-2 active:scale-95 transition-transform h-auto">
+                <div className="flex items-center gap-2 bg-gradient-to-r from-primary/10 to-transparent p-1 pr-3 rounded-lg">
+                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-sm">
+                    <Hexagon className="w-4 h-4 text-primary-foreground fill-primary-foreground/20" />
                   </div>
 
                   {/* Typography Branding */}
-                  <div className="flex flex-col items-start leading-none gap-0.5">
-                    <h1 className="font-bold text-[22px] text-foreground tracking-tight">Arkion</h1>
-                    <span className="text-[10px] text-primary font-bold uppercase tracking-[0.2em]">by arkqube</span>
+                  <div className="flex flex-col items-start leading-none gap-0">
+                    <h1 className="font-bold text-[18px] text-foreground tracking-tight">Arkion</h1>
                   </div>
                 </div>
               </Button>
