@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { Message, User } from '@/types';
 import { DEFAULT_CONFIG } from '@/types';
 import { formatTime, formatFileSize, getFileIcon, isPreviewableFile, getTimeRemaining } from '@/lib/utils';
@@ -24,6 +24,9 @@ interface ChatMessageProps {
 
 export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps) {
   const [isCopied, setIsCopied] = useState(false);
+  const [isActive, setIsActive] = useState(false); // Touch-screen overlay toggle state
+  const messageRef = useRef<HTMLDivElement>(null);
+
   const isSystemMessage = message.type === 'system';
   // Use both socket ID and persistent username to maintain visual ownership across page reloads
   const isOwnMessage = !isSystemMessage && (currentUser?.id === message.sender?.id || currentUser?.username === message.sender?.username);
@@ -79,6 +82,25 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
     );
   }
 
+  // Handle outside clicks to close the mobile menu
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      if (messageRef.current && !messageRef.current.contains(event.target as Node)) {
+        setIsActive(false);
+      }
+    };
+
+    if (isActive) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isActive]);
+
   const handleDelete = () => {
     if (onDelete && isOwnMessage) {
       onDelete(message.id);
@@ -128,12 +150,14 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
           </span>
         </div>
 
-        {/* Message Bubble */}
+        {/* Message Bubble + Touchable Surface */}
         <div
-          className={`relative group rounded-2xl px-4 py-2.5 ${isOwnMessage
+          ref={messageRef}
+          onClick={() => setIsActive(!isActive)}
+          className={`relative group rounded-2xl px-4 py-2.5 cursor-pointer md:cursor-default transition-all ${isOwnMessage
             ? 'bg-primary text-primary-foreground rounded-tr-sm'
             : 'bg-muted rounded-tl-sm'
-            }`}
+            } ${isActive ? 'ring-2 ring-primary/50' : ''}`}
         >
           {/* Text Content */}
           {message.content && (
@@ -191,20 +215,23 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
           )}
 
           {/* Action Buttons (Copy and Delete) */}
-          <div className={`absolute top-2 right-2 md:-top-3 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity flex gap-1 shadow-sm rounded-md bg-background/80 md:bg-background border p-0.5 z-10 backdrop-blur-sm md:backdrop-blur-none ${isOwnMessage ? 'md:right-0' : 'md:-right-2 md:translate-x-full'}`}>
+          <div className={`absolute top-2 right-2 md:-top-3 
+            ${isActive ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none md:pointer-events-auto'} 
+            md:opacity-0 md:group-hover:opacity-100 md:scale-100 transition-all flex gap-1 shadow-md md:shadow-sm rounded-md bg-background/95 md:bg-background border p-1 z-10 backdrop-blur-md md:backdrop-blur-none origin-bottom-right md:origin-center
+            ${isOwnMessage ? 'md:right-0' : 'md:-right-2 md:translate-x-full'}`}>
             {message.content && (
               <button
-                onClick={copyTextToClipboard}
-                className={`p-1.5 hover:bg-muted rounded-sm transition-colors ${isCopied ? 'text-green-500' : 'text-muted-foreground hover:text-foreground'}`}
+                onClick={(e) => { e.stopPropagation(); copyTextToClipboard(); }}
+                className={`p-1.5 hover:bg-muted rounded-md transition-colors ${isCopied ? 'text-green-500' : 'text-foreground/70 hover:text-foreground'}`}
                 title="Copy text"
               >
-                {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                {isCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
               </button>
             )}
             {isOwnMessage && onDelete && (
               <button
-                onClick={handleDelete}
-                className="p-1.5 hover:bg-destructive hover:text-destructive-foreground rounded-sm text-muted-foreground transition-colors"
+                onClick={(e) => { e.stopPropagation(); handleDelete(); }}
+                className="p-1.5 hover:bg-destructive hover:text-destructive-foreground rounded-md text-foreground/70 transition-colors"
                 title="Delete message"
               >
                 <Trash2 className="w-3.5 h-3.5" />

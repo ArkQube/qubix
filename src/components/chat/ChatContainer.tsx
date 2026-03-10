@@ -33,36 +33,18 @@ export function ChatContainer() {
   } = useWebSocket();
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
 
-  // Auto-scroll to bottom on new messages
-  useEffect(() => {
-    const scrollContainer = document.querySelector('[data-slot="scroll-area-viewport"]') as HTMLElement;
-    if (scrollContainer) {
-      const isNearBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 150;
-
-      const lastMessage = messages[messages.length - 1];
-      const isOwnMessage = currentUser && (lastMessage?.sender?.id === currentUser.id || lastMessage?.sender?.username === currentUser.username);
-
-      // Force a tiny logical delay to ensure the DOM layout engine has painted the new height
-      setTimeout(() => {
-        if (isNearBottom || isOwnMessage) {
-          scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'auto' });
-          setShowScrollButton(false);
-        } else {
-          setShowScrollButton(true);
-        }
-      }, 50);
-    }
-  }, [messages, currentUser]);
-
+  // WhatsApp-Style auto-scroll
   const scrollToBottom = () => {
-    const scrollContainer = document.querySelector('[data-slot="scroll-area-viewport"]') as HTMLElement;
-    if (scrollContainer) {
-      scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'smooth' });
-      setShowScrollButton(false);
-    }
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+    setShowScrollButton(false);
   };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, currentUser]);
 
   // Connection status overlay
   if (connecting) {
@@ -150,6 +132,7 @@ export function ChatContainer() {
                 />
               ))
             )}
+            <div ref={bottomRef} className="h-1 w-full" />
           </div>
         </ScrollArea>
 
