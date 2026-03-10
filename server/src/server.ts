@@ -783,8 +783,27 @@ app.get('/api/download', async (req, res) => {
 
 // ── File upload ───────────────────────────────────────────────────────────────
 
-app.post('/api/upload', upload.single('file'), async (req, res) => {
+app.post('/api/upload', upload.single('file'), async (req: express.Request, res: express.Response) => {
   try {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+    // ── 1. IP Abuse Protection Firewall ───────────────────────────────────────
+    const isBlocked = await redis.get(`block:ip:${ip}`);
+    if (isBlocked) {
+      console.warn(`[FIREWALL] Blocked IP ${ip} attempted to upload heavily.`);
+      return res.status(429).json({ error: 'Too Many Requests: IP Temporarily Blocked' });
+    }
+
+    const uploadCount = await redis.incr(`upload:ip:${ip}`);
+    if (uploadCount === 1) await redis.expire(`upload:ip:${ip}`, 60);
+
+    if (uploadCount > 10) {
+      // Hard ban for 10 minutes
+      await redis.setex(`block:ip:${ip}`, 600, '1');
+      console.error(`[FIREWALL] IP ${ip} exceeded upload limits. Banned for 10 minutes.`);
+      return res.status(429).json({ error: 'Rate limit exceeded: IP Blocked for 10 minutes' });
+    }
+
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
     const { sessionId, roomId } = req.body;
@@ -850,6 +869,10 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       JSON.stringify(fileData)
     );
 
+    // ── 2. Storage Tracking Metrics (ZSET) ────────────────────────────────────
+    const listKey = roomId ? 'files:private' : 'files:global';
+    await redis.zadd(listKey, timestamp, fileId);
+
     res.json({
       success: true,
       file: {
@@ -888,15 +911,67 @@ app.get('/api/info', (_, res) => {
 // Keep-alive and Garbage Collection cron
 cron.schedule('*/10 * * * *', async () => {
   try {
-    // Prevent infinite Redis sorted set growth
+    // 1. Prevent infinite Redis global message queue growth
     await redis.zremrangebyscore(
       REDIS_KEYS.globalMessages(),
-      '-inf', // From the beginning of time
+      '-inf',
       Date.now() - (EXPIRATION_TIMES.globalMessage * 1000)
     );
 
+    // ── 2. Cloudinary 20GB Defensive Garbage Collector ────────────────────────
+    let usage = await cloudinary.api.usage();
+    // usage.storage.usage is in bytes. Check against 20GB limit.
+    let usedGB = usage.storage.usage / (1024 * 1024 * 1024);
+
+    if (usedGB > 20) {
+      console.warn(`[CRITICAL] Cloudinary quota at ${usedGB.toFixed(2)}GB (>20GB limit). Triggering aggressive cull.`);
+
+      const passes = [
+        { key: 'files:global', cutoff: Date.now() - (30 * 60 * 1000) },  // Global > 30m
+        { key: 'files:global', cutoff: Date.now() - (15 * 60 * 1000) },  // Global > 15m
+        { key: 'files:private', cutoff: Date.now() - (60 * 60 * 1000) }  // Private > 60m
+      ];
+
+      for (const pass of passes) {
+        if (usedGB <= 20) {
+          console.log(`[CRON] Garbage collector successfully reduced quota below 20GB.`);
+          break;
+        }
+
+        const oldFiles = await redis.zrangebyscore(pass.key, 0, pass.cutoff) as string[];
+        if (oldFiles.length === 0) continue;
+
+        console.log(`[CRON] Deleting ${oldFiles.length} files from ${pass.key}...`);
+
+        for (const fileId of oldFiles) {
+          const fileStr = await redis.get(REDIS_KEYS.file(fileId));
+          if (fileStr) {
+            const fileData = JSON.parse(fileStr);
+            try {
+              await cloudinary.uploader.destroy(fileData.cloudinaryPublicId);
+            } catch (destroyErr) {
+              console.error(`[CRON] Cloudinary destroy failed for ${fileId}`);
+            }
+            await redis.del(REDIS_KEYS.file(fileId));
+
+            // Broadcast deletion to remove from UI visually
+            broadcastToAll({
+              type: WS_MESSAGE_TYPES.FILE_DELETED,
+              payload: { messageId: fileId }
+            });
+          }
+          await redis.zrem(pass.key, fileId);
+        }
+
+        // Re-check API usage explicitly after tier purge
+        usage = await cloudinary.api.usage();
+        usedGB = usage.storage.usage / (1024 * 1024 * 1024);
+      }
+    }
+
+    // Ping Render edge node to keep free tier awake
     await axios.get('https://qubix-rr27.onrender.com/api/info');
-    console.log('[CRON] Cleaned Redis queues and pinged self successfully.');
+    console.log('[CRON] Cleaned Redis queues, audited storage, and pinged self successfully.');
   } catch (err: any) {
     console.error('[CRON] Task failed:', err.message);
   }
