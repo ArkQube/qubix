@@ -4,28 +4,15 @@ import { DEFAULT_CONFIG } from '@/types';
 import { generateSessionId, generateAnonymousUsername } from '@/lib/utils';
 
 interface WebSocketContextType {
-  // Connection state
   connected: boolean;
   connecting: boolean;
   error: string | null;
-
-  // User state
   currentUser: User | null;
-
-  // Messages
   messages: Message[];
-
-  // Room state
   currentRoom: Room | null;
   roomParticipants: User[];
-
-  // Typing indicators
   typingUsers: string[];
-
-  // Upload progress
   uploadProgress: UploadProgress | null;
-
-  // Actions
   connect: () => void;
   disconnect: () => void;
   sendMessage: (content: string, fileData?: any) => void;
@@ -44,7 +31,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sessionId = useRef<string>(localStorage.getItem('arkion_session_id') || generateSessionId());
+  const sessionId = useRef<string>(
+    localStorage.getItem('arkion_session_id') || generateSessionId()
+  );
 
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -56,6 +45,18 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
+  // ─── FIX 1: keep a ref that always reflects the latest currentRoom ──────────
+  //
+  // WHY: handleWebSocketMessage is called from ws.onmessage which is set once
+  // inside connect() (useCallback with [] deps). Any state variable captured
+  // inside that callback is forever stale. Using a ref sidesteps the closure
+  // entirely — ref.current is always the live value.
+  //
+  const currentRoomRef = useRef<Room | null>(null);
+  useEffect(() => {
+    currentRoomRef.current = currentRoom;
+  }, [currentRoom]);
+
   // Store session ID
   useEffect(() => {
     localStorage.setItem('arkion_session_id', sessionId.current);
@@ -66,121 +67,15 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     const interval = setInterval(() => {
       const now = Date.now();
       setMessages(prev => {
-        const activeMessages = prev.filter(m => m.expiresAt > now);
-        if (activeMessages.length !== prev.length) {
-          return activeMessages;
-        }
-        return prev;
+        const active = prev.filter(m => m.expiresAt > now);
+        return active.length !== prev.length ? active : prev;
       });
-    }, 10000); // Check every 10 seconds
+    }, 10_000);
     return () => clearInterval(interval);
   }, []);
 
-  // Connect to WebSocket
-  const connect = useCallback(() => {
-    if (ws.current?.readyState === WebSocket.OPEN) return;
-
-    setConnecting(true);
-    setError(null);
-
-    const wsUrl = DEFAULT_CONFIG.wsUrl;
-    console.log('Connecting to WebSocket:', wsUrl);
-
-    try {
-      ws.current = new WebSocket(wsUrl);
-
-      ws.current.onopen = () => {
-        console.log('WebSocket connected');
-        setConnected(true);
-        setConnecting(false);
-        setError(null);
-
-        // Authenticate
-        sendMessage({
-          type: 'auth',
-          payload: {
-            sessionId: sessionId.current,
-            username: localStorage.getItem('arkion_username') || generateAnonymousUsername(),
-          },
-        });
-
-        // Start ping interval
-        if (pingInterval.current) {
-          clearInterval(pingInterval.current);
-        }
-        pingInterval.current = setInterval(() => {
-          sendMessage({ type: 'ping', payload: {} });
-        }, 30000);
-      };
-
-      ws.current.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          handleWebSocketMessage(data);
-        } catch (err) {
-          console.error('Error parsing WebSocket message:', err);
-        }
-      };
-
-      ws.current.onclose = () => {
-        console.log('WebSocket disconnected');
-        setConnected(false);
-        setConnecting(false);
-
-        // Clear ping interval
-        if (pingInterval.current) {
-          clearInterval(pingInterval.current);
-          pingInterval.current = null;
-        }
-
-        // Attempt reconnection after 3 seconds
-        if (!reconnectTimeout.current) {
-          reconnectTimeout.current = setTimeout(() => {
-            reconnectTimeout.current = null;
-            connect();
-          }, 3000);
-        }
-      };
-
-      ws.current.onerror = (err) => {
-        console.error('WebSocket error:', err);
-        setError('Connection error. Retrying...');
-        setConnecting(false);
-      };
-    } catch (err) {
-      console.error('Error creating WebSocket:', err);
-      setError('Failed to connect');
-      setConnecting(false);
-    }
-  }, []);
-
-  // Disconnect WebSocket
-  const disconnect = useCallback(() => {
-    if (reconnectTimeout.current) {
-      clearTimeout(reconnectTimeout.current);
-      reconnectTimeout.current = null;
-    }
-
-    if (pingInterval.current) {
-      clearInterval(pingInterval.current);
-      pingInterval.current = null;
-    }
-
-    if (ws.current) {
-      ws.current.close();
-      ws.current = null;
-    }
-
-    setConnected(false);
-    setCurrentUser(null);
-    setMessages([]);
-    setCurrentRoom(null);
-    setRoomParticipants([]);
-    setTypingUsers([]);
-  }, []);
-
-  // Send WebSocket message
-  const sendMessage = useCallback((message: any) => {
+  // ─── Low-level WS send (internal) ───────────────────────────────────────────
+  const sendRaw = useCallback((message: any) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify(message));
     } else {
@@ -188,7 +83,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Handle incoming WebSocket messages
+  // ─── Handle incoming messages ────────────────────────────────────────────────
   const handleWebSocketMessage = useCallback((data: any) => {
     const { type, payload } = data;
 
@@ -202,44 +97,81 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         setError(payload.error);
         break;
 
-      case 'message_received':
+      case 'message_received': {
+        // ── FIX 2: filter by roomId ──────────────────────────────────────────
+        //
+        // The server's broadcastToAll() sends global messages to EVERY connected
+        // client, including users inside private rooms. We must discard any
+        // message whose roomId doesn't match where this client currently is.
+        //
+        //  payload.roomId === 'global'  → global chat message
+        //  payload.roomId === <uuid>    → private room message
+        //
+        // We read currentRoomRef.current (not the stale closure value) so this
+        // always reflects the user's actual current room.
+        //
+        const incomingRoomId: string = payload.roomId || 'global';
+        const myRoomId: string = currentRoomRef.current?.id || 'global';
+
+        if (incomingRoomId !== myRoomId) {
+          // Message belongs to a different space — silently discard
+          break;
+        }
+
         setMessages(prev => {
-          // Check if message already exists
-          if (prev.some(m => m.id === payload.message.id)) {
-            return prev;
-          }
-          return [...prev, payload.message];
+          if (prev.some(m => m.id === payload.message.id)) return prev;
+          return [...prev, payload.message].slice(-100);
         });
         break;
+      }
 
       case 'message_history':
+        // message_history is always scoped — server only sends history for the
+        // space the user just entered, so no extra filtering needed here.
         setMessages(payload.messages || []);
         break;
 
-      case 'user_joined':
+      case 'user_joined': {
+        const msgRoomId: string = payload.message?.roomId || 'global';
+        const myRoom: string = currentRoomRef.current?.id || 'global';
+
+        if (msgRoomId !== myRoom) break;
+
         if (payload.message) {
-          setMessages(prev => [...prev, payload.message]);
+          setMessages(prev => [...prev, payload.message].slice(-100));
         }
-        if (payload.user && currentRoom) {
+        if (payload.user && currentRoomRef.current) {
           setRoomParticipants(prev => {
             if (prev.some(p => p.id === payload.user.id)) return prev;
             return [...prev, payload.user];
           });
         }
         break;
+      }
 
-      case 'user_left':
+      case 'user_left': {
+        const msgRoomId: string = payload.message?.roomId || 'global';
+        const myRoom: string = currentRoomRef.current?.id || 'global';
+
+        if (msgRoomId !== myRoom) break;
+
         if (payload.message) {
-          setMessages(prev => [...prev, payload.message]);
+          setMessages(prev => [...prev, payload.message].slice(-100));
         }
         if (payload.user) {
           setRoomParticipants(prev => prev.filter(p => p.id !== payload.user.id));
         }
         break;
+      }
 
-      case 'typing_update':
+      case 'typing_update': {
+        const targetRoomId = payload.roomId || 'global';
+        const myRoom = currentRoomRef.current?.id || 'global';
+        if (targetRoomId !== myRoom) break;
+
         setTypingUsers(payload.typingUsers || []);
         break;
+      }
 
       case 'room_created':
         setCurrentRoom(payload.room);
@@ -269,7 +201,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         break;
 
       case 'file_deleted':
-        // Handle file deletion if needed
         break;
 
       case 'error':
@@ -278,84 +209,159 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         break;
 
       case 'pong':
-        // Ping response received
         break;
 
       default:
         console.log('Unknown message type:', type, payload);
     }
-  }, [currentRoom]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // ← intentionally no deps — we use refs for live values
 
-  // Send chat message
+  // ─── Connect ─────────────────────────────────────────────────────────────────
+  const connect = useCallback(() => {
+    if (ws.current?.readyState === WebSocket.OPEN) return;
+
+    setConnecting(true);
+    setError(null);
+
+    const wsUrl = DEFAULT_CONFIG.wsUrl;
+    console.log('Connecting to WebSocket:', wsUrl);
+
+    try {
+      ws.current = new WebSocket(wsUrl);
+
+      ws.current.onopen = () => {
+        console.log('WebSocket connected');
+        setConnected(true);
+        setConnecting(false);
+        setError(null);
+        setMessages([]);
+        setRoomParticipants([]);
+        setTypingUsers([]);
+
+        sendRaw({
+          type: 'auth',
+          payload: {
+            sessionId: sessionId.current,
+            username:
+              localStorage.getItem('arkion_username') || generateAnonymousUsername(),
+          },
+        });
+
+        if (pingInterval.current) clearInterval(pingInterval.current);
+        pingInterval.current = setInterval(() => {
+          sendRaw({ type: 'ping', payload: {} });
+        }, 30_000);
+      };
+
+      ws.current.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleWebSocketMessage(data);
+        } catch (err) {
+          console.error('Error parsing WebSocket message:', err);
+        }
+      };
+
+      ws.current.onclose = () => {
+        console.log('WebSocket disconnected');
+        setConnected(false);
+        setConnecting(false);
+
+        if (pingInterval.current) {
+          clearInterval(pingInterval.current);
+          pingInterval.current = null;
+        }
+
+        if (!reconnectTimeout.current) {
+          reconnectTimeout.current = setTimeout(() => {
+            reconnectTimeout.current = null;
+            connect();
+          }, 3000);
+        }
+      };
+
+      ws.current.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        setError('Connection error. Retrying...');
+        setConnecting(false);
+      };
+    } catch (err) {
+      console.error('Error creating WebSocket:', err);
+      setError('Failed to connect');
+      setConnecting(false);
+    }
+  }, [handleWebSocketMessage, sendRaw]);
+
+  // ─── Disconnect ───────────────────────────────────────────────────────────────
+  const disconnect = useCallback(() => {
+    if (reconnectTimeout.current) {
+      clearTimeout(reconnectTimeout.current);
+      reconnectTimeout.current = null;
+    }
+    if (pingInterval.current) {
+      clearInterval(pingInterval.current);
+      pingInterval.current = null;
+    }
+    if (ws.current) {
+      ws.current.close();
+      ws.current = null;
+    }
+    setConnected(false);
+    setCurrentUser(null);
+    setMessages([]);
+    setCurrentRoom(null);
+    setRoomParticipants([]);
+    setTypingUsers([]);
+  }, []);
+
+  // ─── Public actions ───────────────────────────────────────────────────────────
   const sendChatMessage = useCallback((content: string, fileData?: any) => {
     if (!content.trim() && !fileData) return;
-
-    sendMessage({
+    sendRaw({
       type: 'send_message',
       payload: {
         content,
-        roomId: currentRoom?.id,
+        roomId: currentRoomRef.current?.id,
         type: fileData ? 'file' : 'text',
         fileData,
       },
     });
-  }, [currentRoom, sendMessage]);
+  }, [sendRaw]);
 
-  // Create room
   const createRoom = useCallback((name?: string, pin?: string) => {
-    sendMessage({
-      type: 'create_room',
-      payload: { name, pin },
-    });
-  }, [sendMessage]);
+    sendRaw({ type: 'create_room', payload: { name, pin } });
+  }, [sendRaw]);
 
-  // Join room
   const joinRoom = useCallback((code: string, pin?: string) => {
-    sendMessage({
-      type: 'join_room',
-      payload: { code, pin },
-    });
-  }, [sendMessage]);
+    sendRaw({ type: 'join_room', payload: { code, pin } });
+  }, [sendRaw]);
 
-  // Leave room
   const leaveRoom = useCallback(() => {
-    sendMessage({
-      type: 'leave_room',
-      payload: {},
-    });
-  }, [sendMessage]);
+    sendRaw({ type: 'leave_room', payload: {} });
+  }, [sendRaw]);
 
-  // Send typing indicator
   const sendTyping = useCallback((isTyping: boolean) => {
-    sendMessage({
+    sendRaw({
       type: 'typing',
-      payload: { isTyping, roomId: currentRoom?.id },
+      payload: { isTyping, roomId: currentRoomRef.current?.id },
     });
-  }, [currentRoom, sendMessage]);
+  }, [sendRaw]);
 
-  // Delete message
   const deleteMessage = useCallback((messageId: string) => {
-    sendMessage({
-      type: 'delete_message',
-      payload: { messageId },
-    });
-  }, [sendMessage]);
+    sendRaw({ type: 'delete_message', payload: { messageId } });
+  }, [sendRaw]);
 
-  // Upload file
   const uploadFile = useCallback(async (file: File): Promise<any> => {
     const fileId = `upload-${Date.now()}`;
 
-    setUploadProgress({
-      fileId,
-      progress: 0,
-      status: 'uploading',
-    });
+    setUploadProgress({ fileId, progress: 0, status: 'uploading' });
 
     const formData = new FormData();
     formData.append('file', file);
     formData.append('sessionId', sessionId.current);
-    if (currentRoom) {
-      formData.append('roomId', currentRoom.id);
+    if (currentRoomRef.current) {
+      formData.append('roomId', currentRoomRef.current.id);
     }
 
     try {
@@ -365,37 +371,22 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Upload failed');
+        const err = await response.json();
+        throw new Error(err.error || 'Upload failed');
       }
 
       const data = await response.json();
-
-      setUploadProgress({
-        fileId,
-        progress: 100,
-        status: 'completed',
-      });
-
-      // Clear progress after a moment
+      setUploadProgress({ fileId, progress: 100, status: 'completed' });
       setTimeout(() => setUploadProgress(null), 2000);
-
       return data.file;
     } catch (err: any) {
-      setUploadProgress({
-        fileId,
-        progress: 0,
-        status: 'error',
-        error: err.message,
-      });
+      setUploadProgress({ fileId, progress: 0, status: 'error', error: err.message });
       throw err;
     }
-  }, [currentRoom]);
+  }, []);
 
-  // Set username
   const setUsername = useCallback((username: string) => {
     localStorage.setItem('arkion_username', username);
-    // Reconnect with new username
     disconnect();
     connect();
   }, [connect, disconnect]);
@@ -403,10 +394,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   // Auto-connect on mount
   useEffect(() => {
     connect();
-
-    return () => {
-      disconnect();
-    };
+    return () => { disconnect(); };
   }, []);
 
   const value: WebSocketContextType = {

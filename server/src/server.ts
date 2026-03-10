@@ -72,8 +72,6 @@ const wss = new WebSocketServer({ noServer: true });
 
 // Handle WebSocket upgrade requests explicitly
 server.on('upgrade', (request, socket, head) => {
-  // We can add origin checking here if strictly needed,
-  // but for now we accept to fix Vercel CORS drops.
   const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
 
   if (pathname === '/ws') {
@@ -90,6 +88,21 @@ const clients = new Map<string, WebSocket>();
 const users = new Map<string, ServerUser>();
 const rooms = new Map<string, ServerRoom>();
 const typingUsers = new Map<string, Set<string>>();
+const socketUserMap = new Map<WebSocket, string>();
+const globalUsers = new Set<string>();
+const roomUsers = new Map<string, Set<string>>();
+const messageRate = new Map<string, number[]>();
+
+function canSendMessage(userId: string) {
+  const now = Date.now();
+  if (!messageRate.has(userId)) messageRate.set(userId, []);
+  const timestamps = messageRate.get(userId)!;
+  timestamps.push(now);
+  while (timestamps.length && now - timestamps[0] > 5000) {
+    timestamps.shift();
+  }
+  return timestamps.length < 20;
+}
 
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
@@ -99,6 +112,24 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10 MB
   },
 });
+
+// ─── Helper: pick the correct Cloudinary resource_type ──────────────────────
+//
+// WHY THIS MATTERS:
+//   resource_type: 'auto' lets Cloudinary decide — but for ZIPs, PDFs, and
+//   other binary formats it may pick 'image' or attempt transcoding, which
+//   corrupts the file.  We pick explicitly based on MIME type so:
+//     - 'image'  → PNG, JPEG, GIF, WEBP, SVG …
+//     - 'video'  → MP4, MOV, WEBM, audio files (Cloudinary groups audio here)
+//     - 'raw'    → everything else (ZIP, PDF, DOCX, APK …) — stored as-is
+//
+function getCloudinaryResourceType(
+  mimeType: string,
+): 'image' | 'video' | 'raw' {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) return 'video';
+  return 'raw'; // ZIP, PDF, DOCX, XLS, APK, etc. — store without processing
+}
 
 // WebSocket message handlers
 interface WSMessageHandler {
@@ -124,15 +155,15 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
 
   users.set(userId, user);
   clients.set(userId, ws);
+  socketUserMap.set(ws, userId);
+  globalUsers.add(userId);
 
-  // Store user in Redis with expiration
   await redis.setex(
     REDIS_KEYS.user(userId),
     EXPIRATION_TIMES.user,
     JSON.stringify(user)
   );
 
-  // Send auth success
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.AUTH_SUCCESS,
     payload: {
@@ -145,31 +176,24 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
     },
   });
 
-  // Broadcast user joined to global chat
   broadcastToAll({
     type: WS_MESSAGE_TYPES.USER_JOINED,
     payload: {
-      user: {
-        id: userId,
-        username: newUsername,
-      },
+      user: { id: userId, username: newUsername },
       message: {
         id: generateId(),
         content: `${newUsername} joined the chat`,
         type: 'system',
         timestamp: Date.now(),
+        roomId: 'global', // ← FIX: client uses this to filter by current space
       },
     },
   });
 
-  // Send recent global messages
   const globalMessages = await getGlobalMessages();
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
-    payload: {
-      messages: globalMessages,
-      roomId: 'global',
-    },
+    payload: { messages: globalMessages, roomId: 'global' },
   });
 
   console.log(`User authenticated: ${newUsername} (${userId})`);
@@ -183,8 +207,18 @@ messageHandlers.set(WS_MESSAGE_TYPES.SEND_MESSAGE, async (ws, userId, payload) =
     return;
   }
 
+  if (!canSendMessage(userId)) {
+    sendError(ws, 'Rate limit exceeded');
+    return;
+  }
+
   const { content, roomId, type = 'text', fileData } = payload;
   const sanitizedContent = sanitizeMessage(content || '');
+
+  if (sanitizedContent.length > 5000) {
+    sendError(ws, 'Message too long');
+    return;
+  }
 
   if (!sanitizedContent && !fileData) {
     sendError(ws, 'Message content cannot be empty');
@@ -206,13 +240,9 @@ messageHandlers.set(WS_MESSAGE_TYPES.SEND_MESSAGE, async (ws, userId, payload) =
     expiresAt,
     type: type as 'text' | 'file' | 'system',
     roomId,
-    fileData: fileData ? {
-      ...fileData,
-      ownerId: userId,
-    } : undefined,
+    fileData: fileData ? { ...fileData, ownerId: userId } : undefined,
   };
 
-  // Store message in Redis with expiration
   const expirationSeconds = roomId
     ? EXPIRATION_TIMES.roomMessage
     : EXPIRATION_TIMES.globalMessage;
@@ -223,7 +253,6 @@ messageHandlers.set(WS_MESSAGE_TYPES.SEND_MESSAGE, async (ws, userId, payload) =
     JSON.stringify(message)
   );
 
-  // Add to room or global message list
   if (roomId) {
     await redis.zadd(REDIS_KEYS.roomMessages(roomId), timestamp, messageId);
     await redis.expire(REDIS_KEYS.roomMessages(roomId), EXPIRATION_TIMES.roomMessage);
@@ -232,17 +261,13 @@ messageHandlers.set(WS_MESSAGE_TYPES.SEND_MESSAGE, async (ws, userId, payload) =
     await redis.expire(REDIS_KEYS.globalMessages(), EXPIRATION_TIMES.globalMessage);
   }
 
-  // Broadcast message
   const broadcastMessage = {
     type: WS_MESSAGE_TYPES.MESSAGE_RECEIVED,
     payload: {
       message: {
         id: messageId,
         content: sanitizedContent,
-        sender: {
-          id: userId,
-          username: user.username,
-        },
+        sender: { id: userId, username: user.username },
         timestamp,
         expiresAt,
         type,
@@ -264,10 +289,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.SEND_MESSAGE, async (ws, userId, payload) =
 // Create room handler
 messageHandlers.set(WS_MESSAGE_TYPES.CREATE_ROOM, async (ws, userId, payload) => {
   const user = users.get(userId);
-  if (!user) {
-    sendError(ws, 'User not authenticated');
-    return;
-  }
+  if (!user) { sendError(ws, 'User not authenticated'); return; }
 
   const { name, pin } = payload;
   const roomCode = generateRoomCode();
@@ -289,17 +311,12 @@ messageHandlers.set(WS_MESSAGE_TYPES.CREATE_ROOM, async (ws, userId, payload) =>
 
   rooms.set(roomId, room);
 
-  // Store room in Redis with expiration
   await redis.setex(
     REDIS_KEYS.room(roomId),
     EXPIRATION_TIMES.room,
-    JSON.stringify({
-      ...room,
-      participants: Array.from(room.participants),
-    })
+    JSON.stringify({ ...room, participants: Array.from(room.participants) })
   );
 
-  // Update user's current room
   user.currentRoom = roomId;
 
   sendToClient(ws, {
@@ -322,10 +339,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.CREATE_ROOM, async (ws, userId, payload) =>
 // Join room handler
 messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
   const user = users.get(userId);
-  if (!user) {
-    sendError(ws, 'User not authenticated');
-    return;
-  }
+  if (!user) { sendError(ws, 'User not authenticated'); return; }
 
   const { code, pin } = payload;
   const upperCode = code.toUpperCase();
@@ -335,21 +349,19 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
     return;
   }
 
-  // Find room by code
   let room: ServerRoom | undefined;
   for (const r of rooms.values()) {
-    if (r.code === upperCode) {
-      room = r;
-      break;
-    }
+    if (r.code === upperCode) { room = r; break; }
   }
 
   if (!room) {
-    // Try to get from Redis
-    const roomKeys = await redis.keys('room:*');
-    for (const key of roomKeys) {
-      const roomData = await redis.get(key);
-      if (roomData) {
+    let cursor = '0';
+    do {
+      const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'room:*', 'COUNT', 50);
+      cursor = nextCursor;
+      for (const key of keys) {
+        const roomData = await redis.get(key);
+        if (!roomData) continue;
         const parsedRoom = JSON.parse(roomData);
         if (parsedRoom.code === upperCode) {
           const newRoom: ServerRoom = {
@@ -361,44 +373,33 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
           break;
         }
       }
-    }
+      if (room) break;
+    } while (cursor !== '0');
   }
 
-  if (!room) {
-    sendError(ws, 'Room not found');
-    return;
-  }
+  if (!room) { sendError(ws, 'Room not found'); return; }
+  if (room.pin && room.pin !== pin) { sendError(ws, 'Invalid PIN'); return; }
 
-  // Verify PIN if room has one
-  if (room.pin && room.pin !== pin) {
-    sendError(ws, 'Invalid PIN');
-    return;
-  }
-
-  // Leave current room if in one
   if (user.currentRoom && user.currentRoom !== room.id) {
     await leaveRoom(userId, user.currentRoom);
   }
 
-  // Add user to room
   room.participants.add(userId);
   user.currentRoom = room.id;
 
-  // Update room in Redis
+  globalUsers.delete(userId);
+  if (!roomUsers.has(room.id)) roomUsers.set(room.id, new Set());
+  roomUsers.get(room.id)!.add(userId);
+
   await redis.setex(
     REDIS_KEYS.room(room.id),
     EXPIRATION_TIMES.room,
-    JSON.stringify({
-      ...room,
-      participants: Array.from(room.participants),
-    })
+    JSON.stringify({ ...room, participants: Array.from(room.participants) })
   );
 
-  // Add to room participants set
   await redis.sadd(REDIS_KEYS.roomParticipants(room.id), userId);
   await redis.expire(REDIS_KEYS.roomParticipants(room.id), EXPIRATION_TIMES.room);
 
-  // Send room joined confirmation
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.ROOM_JOINED,
     payload: {
@@ -417,14 +418,10 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
     },
   });
 
-  // Broadcast user joined to room
   broadcastToRoom(room.id, {
     type: WS_MESSAGE_TYPES.USER_JOINED,
     payload: {
-      user: {
-        id: userId,
-        username: user.username,
-      },
+      user: { id: userId, username: user.username },
       message: {
         id: generateId(),
         content: `${user.username} joined the room`,
@@ -434,14 +431,10 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
     },
   });
 
-  // Send recent room messages
   const roomMessages = await getRoomMessages(room.id);
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
-    payload: {
-      messages: roomMessages,
-      roomId: room.id,
-    },
+    payload: { messages: roomMessages, roomId: room.id },
   });
 
   console.log(`User ${user.username} joined room ${room.code}`);
@@ -450,18 +443,12 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
 // Leave room handler
 messageHandlers.set(WS_MESSAGE_TYPES.LEAVE_ROOM, async (ws, userId, payload) => {
   const user = users.get(userId);
-  if (!user || !user.currentRoom) {
-    sendError(ws, 'Not in a room');
-    return;
-  }
+  if (!user || !user.currentRoom) { sendError(ws, 'Not in a room'); return; }
 
   await leaveRoom(userId, user.currentRoom);
-
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.ROOM_LEFT,
-    payload: {
-      roomId: user.currentRoom,
-    },
+    payload: { roomId: user.currentRoom },
   });
 });
 
@@ -473,75 +460,42 @@ messageHandlers.set(WS_MESSAGE_TYPES.TYPING, async (ws, userId, payload) => {
   const { isTyping, roomId } = payload;
   const targetRoomId = roomId || 'global';
 
-  if (!typingUsers.has(targetRoomId)) {
-    typingUsers.set(targetRoomId, new Set());
-  }
-
+  if (!typingUsers.has(targetRoomId)) typingUsers.set(targetRoomId, new Set());
   const roomTyping = typingUsers.get(targetRoomId)!;
 
-  if (isTyping) {
-    roomTyping.add(user.username);
-  } else {
-    roomTyping.delete(user.username);
-  }
+  if (isTyping) { roomTyping.add(user.username); } else { roomTyping.delete(user.username); }
 
   const typingUpdate = {
     type: WS_MESSAGE_TYPES.TYPING_UPDATE,
-    payload: {
-      roomId: targetRoomId,
-      typingUsers: Array.from(roomTyping),
-    },
+    payload: { roomId: targetRoomId, typingUsers: Array.from(roomTyping) },
   };
 
-  if (roomId) {
-    broadcastToRoom(roomId, typingUpdate);
-  } else {
-    broadcastToAll(typingUpdate);
-  }
+  if (roomId) { broadcastToRoom(roomId, typingUpdate); } else { broadcastToAll(typingUpdate); }
 });
 
 // Delete message handler
 messageHandlers.set(WS_MESSAGE_TYPES.DELETE_MESSAGE, async (ws, userId, payload) => {
   const user = users.get(userId);
-  if (!user) {
-    sendError(ws, 'User not authenticated');
-    return;
-  }
+  if (!user) { sendError(ws, 'User not authenticated'); return; }
 
   const { messageId } = payload;
-
-  // Get message from Redis
   const messageData = await redis.get(REDIS_KEYS.message(messageId));
-  if (!messageData) {
-    sendError(ws, 'Message not found');
-    return;
-  }
+  if (!messageData) { sendError(ws, 'Message not found'); return; }
 
   const message: ServerMessage = JSON.parse(messageData);
+  if (message.senderId !== userId) { sendError(ws, 'Can only delete your own messages'); return; }
 
-  // Verify ownership
-  if (message.senderId !== userId) {
-    sendError(ws, 'Can only delete your own messages');
-    return;
-  }
-
-  // Delete from Redis
   await redis.del(REDIS_KEYS.message(messageId));
 
-  // Remove from message lists
   if (message.roomId) {
     await redis.zrem(REDIS_KEYS.roomMessages(message.roomId), messageId);
   } else {
     await redis.zrem(REDIS_KEYS.globalMessages(), messageId);
   }
 
-  // Broadcast deletion
   const deleteBroadcast = {
     type: WS_MESSAGE_TYPES.DELETE_MESSAGE,
-    payload: {
-      messageId,
-      roomId: message.roomId || 'global',
-    },
+    payload: { messageId, roomId: message.roomId || 'global' },
   };
 
   if (message.roomId) {
@@ -556,72 +510,48 @@ messageHandlers.set(WS_MESSAGE_TYPES.DELETE_MESSAGE, async (ws, userId, payload)
 // Delete file handler
 messageHandlers.set(WS_MESSAGE_TYPES.DELETE_FILE, async (ws, userId, payload) => {
   const user = users.get(userId);
-  if (!user) {
-    sendError(ws, 'User not authenticated');
-    return;
-  }
+  if (!user) { sendError(ws, 'User not authenticated'); return; }
 
   const { fileId } = payload;
-
-  // Get file metadata from Redis
   const fileData = await redis.get(REDIS_KEYS.file(fileId));
-  if (!fileData) {
-    sendError(ws, 'File not found');
-    return;
-  }
+  if (!fileData) { sendError(ws, 'File not found'); return; }
 
   const file: ServerFileData = JSON.parse(fileData);
+  if (file.ownerId !== userId) { sendError(ws, 'Can only delete your own files'); return; }
 
-  // Verify ownership
-  if (file.ownerId !== userId) {
-    sendError(ws, 'Can only delete your own files');
-    return;
-  }
-
-  // Delete from Cloudinary
   try {
     await cloudinary.uploader.destroy(file.cloudinaryPublicId);
   } catch (err) {
     console.error('Error deleting file from Cloudinary:', err);
   }
 
-  // Delete from Redis
   await redis.del(REDIS_KEYS.file(fileId));
-
-  // Broadcast file deletion
-  broadcastToAll({
-    type: WS_MESSAGE_TYPES.FILE_DELETED,
-    payload: {
-      fileId,
-    },
-  });
+  broadcastToAll({ type: WS_MESSAGE_TYPES.FILE_DELETED, payload: { fileId } });
 
   console.log(`File ${fileId} deleted by ${user.username}`);
 });
 
-// Ping handler (keep connection alive)
-messageHandlers.set(WS_MESSAGE_TYPES.PING, async (ws, userId) => {
+// Ping handler
+messageHandlers.set(WS_MESSAGE_TYPES.PING, async (ws) => {
   sendToClient(ws, { type: WS_MESSAGE_TYPES.PONG, payload: {} });
 });
 
-// Helper functions
+// ─── WebSocket helpers ────────────────────────────────────────────────────────
+
 function sendToClient(ws: WebSocket, message: any) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(message));
-  }
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
 }
 
 function sendError(ws: WebSocket, error: string) {
-  sendToClient(ws, {
-    type: WS_MESSAGE_TYPES.ERROR,
-    payload: { error },
-  });
+  sendToClient(ws, { type: WS_MESSAGE_TYPES.ERROR, payload: { error } });
 }
 
 function broadcastToAll(message: any, excludeUserId?: string) {
   const messageStr = JSON.stringify(message);
-  clients.forEach((ws, userId) => {
-    if (userId !== excludeUserId && ws.readyState === WebSocket.OPEN) {
+  globalUsers.forEach(userId => {
+    if (userId === excludeUserId) return;
+    const ws = clients.get(userId);
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(messageStr);
     }
   });
@@ -630,14 +560,11 @@ function broadcastToAll(message: any, excludeUserId?: string) {
 function broadcastToRoom(roomId: string, message: any, excludeUserId?: string) {
   const room = rooms.get(roomId);
   if (!room) return;
-
   const messageStr = JSON.stringify(message);
   room.participants.forEach(userId => {
     if (userId !== excludeUserId) {
       const ws = clients.get(userId);
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(messageStr);
-      }
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(messageStr);
     }
   });
 }
@@ -645,32 +572,25 @@ function broadcastToRoom(roomId: string, message: any, excludeUserId?: string) {
 async function leaveRoom(userId: string, roomId: string) {
   const user = users.get(userId);
   const room = rooms.get(roomId);
-
   if (!user || !room) return;
 
   room.participants.delete(userId);
   user.currentRoom = undefined;
 
-  // Update room in Redis
+  roomUsers.get(roomId)?.delete(userId);
+  globalUsers.add(userId);
+
   if (room.participants.size > 0) {
     await redis.setex(
       REDIS_KEYS.room(roomId),
       EXPIRATION_TIMES.room,
-      JSON.stringify({
-        ...room,
-        participants: Array.from(room.participants),
-      })
+      JSON.stringify({ ...room, participants: Array.from(room.participants) })
     );
     await redis.srem(REDIS_KEYS.roomParticipants(roomId), userId);
-
-    // Broadcast user left
     broadcastToRoom(roomId, {
       type: WS_MESSAGE_TYPES.USER_LEFT,
       payload: {
-        user: {
-          id: userId,
-          username: user.username,
-        },
+        user: { id: userId, username: user.username },
         message: {
           id: generateId(),
           content: `${user.username} left the room`,
@@ -680,7 +600,6 @@ async function leaveRoom(userId: string, roomId: string) {
       },
     });
   } else {
-    // Delete empty room
     rooms.delete(roomId);
     await redis.del(REDIS_KEYS.room(roomId));
     await redis.del(REDIS_KEYS.roomParticipants(roomId));
@@ -689,49 +608,34 @@ async function leaveRoom(userId: string, roomId: string) {
   console.log(`User ${user.username} left room ${room.code}`);
 }
 
-async function getGlobalMessages(limit: number = 50): Promise<any[]> {
+async function getGlobalMessages(limit = 50): Promise<any[]> {
   const messageIds = await redis.zrevrange(REDIS_KEYS.globalMessages(), 0, limit - 1);
   const messages: any[] = [];
-
   for (const messageId of messageIds.reverse()) {
     const messageData = await redis.get(REDIS_KEYS.message(messageId));
     if (messageData) {
       const parsed = JSON.parse(messageData);
-      messages.push({
-        ...parsed,
-        sender: {
-          id: parsed.senderId,
-          username: parsed.senderUsername,
-        }
-      });
+      messages.push({ ...parsed, sender: { id: parsed.senderId, username: parsed.senderUsername } });
     }
   }
-
   return messages;
 }
 
-async function getRoomMessages(roomId: string, limit: number = 50): Promise<any[]> {
+async function getRoomMessages(roomId: string, limit = 50): Promise<any[]> {
   const messageIds = await redis.zrevrange(REDIS_KEYS.roomMessages(roomId), 0, limit - 1);
   const messages: any[] = [];
-
   for (const messageId of messageIds.reverse()) {
     const messageData = await redis.get(REDIS_KEYS.message(messageId));
     if (messageData) {
       const parsed = JSON.parse(messageData);
-      messages.push({
-        ...parsed,
-        sender: {
-          id: parsed.senderId,
-          username: parsed.senderUsername,
-        }
-      });
+      messages.push({ ...parsed, sender: { id: parsed.senderId, username: parsed.senderUsername } });
     }
   }
-
   return messages;
 }
 
-// WebSocket connection handler
+// ─── WebSocket connection handler ─────────────────────────────────────────────
+
 wss.on('connection', (ws: WebSocket) => {
   console.log('New WebSocket connection');
 
@@ -740,25 +644,14 @@ wss.on('connection', (ws: WebSocket) => {
       const message: WebSocketClientMessage = JSON.parse(data.toString());
       const { type, payload } = message;
 
-      // Find user ID from WebSocket
-      let userId: string | undefined;
-      for (const [id, client] of clients.entries()) {
-        if (client === ws) {
-          userId = id;
-          break;
-        }
-      }
+      const userId = socketUserMap.get(ws);
 
-      // Handle auth separately (no userId needed)
       if (type === WS_MESSAGE_TYPES.AUTH) {
         const handler = messageHandlers.get(type);
-        if (handler) {
-          await handler(ws, '', payload);
-        }
+        if (handler) await handler(ws, '', payload);
         return;
       }
 
-      // For other handlers, user must be authenticated
       if (!userId || !users.has(userId)) {
         sendError(ws, 'Not authenticated');
         return;
@@ -777,61 +670,71 @@ wss.on('connection', (ws: WebSocket) => {
   });
 
   ws.on('close', () => {
-    // Find and remove user
-    for (const [id, client] of clients.entries()) {
-      if (client === ws) {
-        const user = users.get(id);
-        if (user) {
-          // Leave current room if in one
-          if (user.currentRoom) {
-            leaveRoom(id, user.currentRoom);
-          }
+    const id = socketUserMap.get(ws);
+    socketUserMap.delete(ws);
 
-          // Broadcast user left global chat
-          broadcastToAll({
-            type: WS_MESSAGE_TYPES.USER_LEFT,
-            payload: {
-              user: {
-                id,
-                username: user.username,
-              },
-              message: {
-                id: generateId(),
-                content: `${user.username} left the chat`,
-                type: 'system',
-                timestamp: Date.now(),
-              },
+    if (id) {
+      const user = users.get(id);
+      if (user) {
+        if (user.currentRoom) leaveRoom(id, user.currentRoom);
+        broadcastToAll({
+          type: WS_MESSAGE_TYPES.USER_LEFT,
+          payload: {
+            user: { id, username: user.username },
+            message: {
+              id: generateId(),
+              content: `${user.username} left the chat`,
+              type: 'system',
+              timestamp: Date.now(),
+              roomId: 'global',
             },
-          }, id);
-
-          users.delete(id);
-          console.log(`User disconnected: ${user.username}`);
-        }
-        clients.delete(id);
-        break;
+          },
+        }, id);
+        users.delete(id);
+        globalUsers.delete(id);
+        messageRate.delete(id);
+        console.log(`User disconnected: ${user.username}`);
       }
+      clients.delete(id);
     }
   });
 
-  ws.on('error', (err) => {
-    console.error('WebSocket error:', err);
-  });
+  ws.on('error', (err) => console.error('WebSocket error:', err));
 });
 
-// HTTP Routes
+// ─── HTTP Routes ──────────────────────────────────────────────────────────────
 
-// Health check
 app.get('/ping', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
-// Download Proxy file endpoint
+// ── Download proxy ────────────────────────────────────────────────────────────
+//
+// FIX: There was a DUPLICATE /api/download route — Express would silently ignore
+// the second one.  Now there is only ONE, clean route.
+//
+// This proxy is the only correct way to force a download without opening a new
+// tab.  The browser's <a download> attribute is ignored for cross-origin URLs,
+// so we stream the file through our own domain and set the right headers here.
+//
 app.get('/api/download', async (req, res) => {
   const fileUrl = req.query.url as string;
   const fileName = req.query.name as string;
 
-  if (!fileUrl) {
-    return res.status(400).json({ error: 'Missing file URL' });
+  if (!fileUrl || !fileName) {
+    return res.status(400).json({ error: 'Missing url or name parameters' });
+  }
+
+  // Basic SSRF guard — only proxy Cloudinary URLs
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(fileUrl);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+
+  if (!parsedUrl.hostname.endsWith('cloudinary.com') && !parsedUrl.hostname.endsWith('res.cloudinary.com')) {
+    return res.status(403).json({ error: 'Only Cloudinary URLs are allowed' });
   }
 
   try {
@@ -841,15 +744,29 @@ app.get('/api/download', async (req, res) => {
       responseType: 'stream',
       headers: {
         'Accept': '*/*',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (compatible; Arkion/2.0)',
       },
+      // Forward the real Content-Length so browsers show a progress bar
+      validateStatus: () => true,
     });
 
-    // Set attachment header to force download
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName || 'download'}"`);
+    if (response.status !== 200) {
+      return res.status(response.status).json({ error: 'Upstream error' });
+    }
+
+    // Force download — no inline preview, no new tab
+    // Use RFC 5987 encoding so non-ASCII filenames (Chinese, etc) survive HTTP headers
+    const safeFileName = encodeURIComponent(fileName).replace(/'/g, '%27');
+    // RFC 5987 encoding supports any Unicode filename (Chinese, Japanese, emoji, etc)
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeFileName}; filename="download"`);
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
 
-    // Pipe the external file directly to the user
+    // Forward content-length so the browser can show download progress
+    if (response.headers['content-length']) {
+      res.setHeader('Content-Length', response.headers['content-length']);
+    }
+
+    // Stream directly to the client — no buffering in memory
     response.data.pipe(res);
   } catch (err: any) {
     console.error('Proxy download error:', err.message);
@@ -857,44 +774,37 @@ app.get('/api/download', async (req, res) => {
   }
 });
 
-// Helper to prevent binary corruption: explicitly assign Cloudinary resource types
-function getCloudinaryResourceType(mimetype: string): 'image' | 'video' | 'raw' {
-  if (mimetype.startsWith('image/')) return 'image';
-  if (mimetype.startsWith('video/') || mimetype.startsWith('audio/')) return 'video';
-  return 'raw'; // PDF, ZIP, APK, DOCX, etc. stored byte-for-byte, no processing
-}
+// ── File upload ───────────────────────────────────────────────────────────────
 
-// File upload endpoint
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
     const { sessionId, roomId } = req.body;
+    if (!sessionId) return res.status(401).json({ error: 'Not authenticated' });
 
-    if (!sessionId) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
-
-    // Find user by session ID
     let user: ServerUser | undefined;
     for (const u of users.values()) {
-      if (u.sessionId === sessionId) {
-        user = u;
-        break;
-      }
+      if (u.sessionId === sessionId) { user = u; break; }
     }
+    if (!user) return res.status(401).json({ error: 'User not found' });
 
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
+    // ── FIX: pick resource_type based on MIME type ────────────────────────────
+    //
+    // resource_type: 'auto' was used before.  The problem:
+    //   - For images/videos: fine.
+    //   - For ZIPs, PDFs, DOCXs: Cloudinary sometimes picked 'image' and
+    //     attempted to transcode them — corrupting the file.
+    //
+    // With explicit resource_type: 'raw' for non-media files, Cloudinary stores
+    // the bytes as-is, and the download proxy streams them back untouched.
+    //
+    const resourceType = getCloudinaryResourceType(req.file.mimetype);
 
-    // Upload to Cloudinary
     const result = await new Promise<any>((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
-          resource_type: getCloudinaryResourceType(req.file!.mimetype),
+          resource_type: resourceType,
           folder: 'arkion-uploads',
           expires_at: Math.floor(Date.now() / 1000) + EXPIRATION_TIMES.file,
         },
@@ -910,9 +820,14 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const timestamp = Date.now();
     const expiresAt = timestamp + EXPIRATION_TIMES.file * 1000;
 
+    // FIX: Multer stores originalname as Latin-1 bytes, but browsers send
+    // filenames as UTF-8. Re-decode to fix garbled filenames with Chinese/Japanese etc.
+    // e.g. garbled "å¨åžè½½" becomes the correct "安装包"
+    const fileName = Buffer.from(req.file!.originalname, 'latin1').toString('utf8');
+
     const fileData: ServerFileData = {
       fileId,
-      fileName: Buffer.from(req.file.originalname, 'latin1').toString('utf8'),
+      fileName,
       fileSize: req.file.size,
       fileType: req.file.mimetype,
       url: result.secure_url,
@@ -922,7 +837,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       expiresAt,
     };
 
-    // Store file metadata in Redis
     await redis.setex(
       REDIS_KEYS.file(fileId),
       EXPIRATION_TIMES.file,
@@ -942,41 +856,14 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       },
     });
 
-    console.log(`File uploaded: ${fileData.fileName} by ${user.username}`);
+    console.log(`File uploaded: ${fileData.fileName} (${resourceType}) by ${user.username}`);
   } catch (err) {
     console.error('File upload error:', err);
     res.status(500).json({ error: 'File upload failed' });
   }
 });
 
-// Proxy file downloads to enforce Content-Disposition: attachment for all files
-app.get('/api/download', async (req, res) => {
-  const fileUrl = req.query.url as string;
-  const fileName = req.query.name as string;
-
-  if (!fileUrl || !fileName) {
-    res.status(400).send('Missing url or name parameters');
-    return;
-  }
-
-  try {
-    const response = await axios({
-      url: fileUrl,
-      method: 'GET',
-      responseType: 'stream',
-    });
-
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
-    res.setHeader('Content-Type', response.headers['content-type']);
-
-    response.data.pipe(res);
-  } catch (error) {
-    console.error('Error proxying download:', error);
-    res.status(500).send('Failed to download file');
-  }
-});
-
-// API route to check server status
+// API info
 app.get('/api/info', (_, res) => {
   res.json({
     status: 'online',
@@ -991,28 +878,24 @@ app.get('/api/info', (_, res) => {
   });
 });
 
-// Cleanup expired data periodically
-setInterval(async () => {
-  try {
-    // In a real app we would have a function here, but we rely on Redis TTL mostly
-  } catch (err) {
-    console.error(err);
-  }
-}, 60 * 1000); // Check every minute
-
-// --- RENDER KEEP-ALIVE CRON ---
-// Prevent the free-tier Render server from sleeping
+// Keep-alive and Garbage Collection cron
 cron.schedule('*/10 * * * *', async () => {
   try {
-    const url = 'https://qubix-rr27.onrender.com/api/info';
-    await axios.get(url);
-    console.log('[KEEP-ALIVE] Pinged self successfully.');
+    // Prevent infinite Redis sorted set growth
+    await redis.zremrangebyscore(
+      REDIS_KEYS.globalMessages(),
+      '-inf', // From the beginning of time
+      Date.now() - (EXPIRATION_TIMES.globalMessage * 1000)
+    );
+
+    await axios.get('https://qubix-rr27.onrender.com/api/info');
+    console.log('[CRON] Cleaned Redis queues and pinged self successfully.');
   } catch (err: any) {
-    console.error('[KEEP-ALIVE] Ping failed:', err.message);
+    console.error('[CRON] Task failed:', err.message);
   }
 });
 
-// Start the server
+// Start server
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Arkion Server running on port ${PORT}`);
@@ -1022,16 +905,8 @@ server.listen(PORT, () => {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully');
-
-  // Close all WebSocket connections
-  wss.clients.forEach(ws => {
-    ws.close();
-  });
-
-  // Close Redis connection
+  wss.clients.forEach(ws => ws.close());
   await redis.quit();
-
-  // Close HTTP server
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
