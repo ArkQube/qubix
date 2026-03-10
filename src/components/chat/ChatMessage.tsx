@@ -117,7 +117,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
       </div>
 
       {/* Message Content */}
-      <div className={`flex flex-col max-w-[70%] ${isOwnMessage ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col max-w-[85vw] md:max-w-[70%] ${isOwnMessage ? 'items-end' : 'items-start'}`}>
         {/* Sender Name */}
         <div className="flex items-center gap-2 mb-1">
           <span className="text-sm font-medium">{message.sender.username}</span>
@@ -148,14 +148,14 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
                   <img
                     src={message.fileData.url}
                     alt={message.fileData.fileName}
-                    className="max-w-full max-h-64 object-contain"
+                    className="w-full block max-w-full max-h-64 object-contain bg-background/20"
                     loading="lazy"
                   />
                   <div className="p-2 flex items-center justify-between bg-background/80">
-                    <div className="flex items-center gap-2 text-xs">
-                      {renderFileIcon(message.fileData.fileType)}
-                      <span className="truncate max-w-[150px]">{message.fileData.fileName}</span>
-                      <span className="text-muted-foreground">({formatFileSize(message.fileData.fileSize)})</span>
+                    <div className="flex items-center gap-2 text-xs min-w-0">
+                      <div className="shrink-0">{renderFileIcon(message.fileData.fileType)}</div>
+                      <span className="break-all max-w-[150px]">{message.fileData.fileName}</span>
+                      <span className="text-muted-foreground shrink-0">({formatFileSize(message.fileData.fileSize)})</span>
                     </div>
                     <Button
                       variant="ghost"
@@ -174,7 +174,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
                     {renderFileIcon(message.fileData.fileType)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{message.fileData.fileName}</p>
+                    <p className="text-sm font-medium break-all">{message.fileData.fileName}</p>
                     <p className="text-xs opacity-70">{formatFileSize(message.fileData.fileSize)}</p>
                   </div>
                   <Button
@@ -191,7 +191,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
           )}
 
           {/* Action Buttons (Copy and Delete) */}
-          <div className={`absolute -top-3 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity flex gap-1 shadow-sm rounded-md bg-background border p-0.5 z-10 ${isOwnMessage ? 'right-0' : '-right-2 translate-x-full'}`}>
+          <div className={`absolute top-2 right-2 md:-top-3 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity flex gap-1 shadow-sm rounded-md bg-background/80 md:bg-background border p-0.5 z-10 backdrop-blur-sm md:backdrop-blur-none ${isOwnMessage ? 'md:right-0' : 'md:-right-2 md:translate-x-full'}`}>
             {message.content && (
               <button
                 onClick={copyTextToClipboard}

@@ -912,7 +912,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
     const fileData: ServerFileData = {
       fileId,
-      fileName: req.file.originalname,
+      fileName: Buffer.from(req.file.originalname, 'latin1').toString('utf8'),
       fileSize: req.file.size,
       fileType: req.file.mimetype,
       url: result.secure_url,
@@ -966,7 +966,7 @@ app.get('/api/download', async (req, res) => {
       responseType: 'stream',
     });
 
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     res.setHeader('Content-Type', response.headers['content-type']);
 
     response.data.pipe(res);
