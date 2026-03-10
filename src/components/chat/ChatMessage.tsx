@@ -28,32 +28,14 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
   // Use both socket ID and persistent username to maintain visual ownership across page reloads
   const isOwnMessage = !isSystemMessage && (currentUser?.id === message.sender?.id || currentUser?.username === message.sender?.username);
 
-  const copyMediaToClipboard = async () => {
+  const copyTextToClipboard = async () => {
     if (message.content) {
-      await navigator.clipboard.writeText(message.content);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
-    } else if (message.fileData) {
       try {
-        if (message.fileData.fileType.startsWith('image/') && typeof ClipboardItem !== 'undefined') {
-          // Fetch the image natively through our proxy to bypass CORS
-          const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}`;
-          const response = await fetch(proxyUrl);
-          const blob = await response.blob();
-
-          await navigator.clipboard.write([
-            new ClipboardItem({
-              [blob.type]: blob
-            })
-          ]);
-        } else {
-          // Fallback to copying just the filename for non-images
-          await navigator.clipboard.writeText(message.fileData.fileName);
-        }
+        await navigator.clipboard.writeText(message.content);
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);
       } catch (err) {
-        console.error('Failed to copy media:', err);
+        console.error('Failed to copy text:', err);
       }
     }
   };
@@ -210,13 +192,15 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
 
           {/* Action Buttons (Copy and Delete) */}
           <div className={`absolute -top-3 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity flex gap-1 shadow-sm rounded-md bg-background border p-0.5 z-10 ${isOwnMessage ? 'right-0' : '-right-2 translate-x-full'}`}>
-            <button
-              onClick={copyMediaToClipboard}
-              className={`p-1.5 hover:bg-muted rounded-sm transition-colors ${isCopied ? 'text-green-500' : 'text-muted-foreground hover:text-foreground'}`}
-              title="Copy message"
-            >
-              {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            </button>
+            {message.content && (
+              <button
+                onClick={copyTextToClipboard}
+                className={`p-1.5 hover:bg-muted rounded-sm transition-colors ${isCopied ? 'text-green-500' : 'text-muted-foreground hover:text-foreground'}`}
+                title="Copy text"
+              >
+                {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            )}
             {isOwnMessage && onDelete && (
               <button
                 onClick={handleDelete}
