@@ -1,5 +1,4 @@
 import type { Message, User } from '@/types';
-import { DEFAULT_CONFIG } from '@/types';
 import { formatTime, formatFileSize, getFileIcon, isPreviewableFile, getTimeRemaining } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
@@ -29,7 +28,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
     if (message.content) {
       navigator.clipboard.writeText(message.content);
     } else if (message.fileData) {
-      navigator.clipboard.writeText(getDownloadUrl(message.fileData.url, message.fileData.fileName));
+      navigator.clipboard.writeText(getDownloadUrl(message.fileData.url));
     }
   };
 
@@ -66,9 +65,16 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
     }
   };
 
-  const getDownloadUrl = (url: string, fileName: string) => {
-    // Pipe through our backend proxy to enforce Content-Disposition: attachment for all files (like PDFs)
-    return `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(url)}&name=${encodeURIComponent(fileName)}`;
+  const getDownloadUrl = (url: string) => {
+    // Cloudinary natively supports forcing an attachment by adding 'fl_attachment' to the transformation string
+    // e.g., https://res.cloudinary.com/demo/image/upload/fl_attachment/v1...
+    if (url.includes('res.cloudinary.com')) {
+      const parts = url.split('/upload/');
+      if (parts.length === 2) {
+        return `${parts[0]}/upload/fl_attachment/${parts[1]}`;
+      }
+    }
+    return url;
   };
 
   return (
@@ -127,7 +133,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
                       <span className="text-muted-foreground">({formatFileSize(message.fileData.fileSize)})</span>
                     </div>
                     <a
-                      href={getDownloadUrl(message.fileData.url, message.fileData.fileName)}
+                      href={getDownloadUrl(message.fileData.url)}
                       download={message.fileData.fileName}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -149,7 +155,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
                     <p className="text-xs opacity-70">{formatFileSize(message.fileData.fileSize)}</p>
                   </div>
                   <a
-                    href={getDownloadUrl(message.fileData.url, message.fileData.fileName)}
+                    href={getDownloadUrl(message.fileData.url)}
                     download={message.fileData.fileName}
                     target="_blank"
                     rel="noopener noreferrer"

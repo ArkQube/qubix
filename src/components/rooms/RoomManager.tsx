@@ -131,7 +131,7 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
         </div>
 
         {/* Right: Action buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
 
           {/* Global Chat button — click to go back to global from a private room */}
           {currentRoom && (
