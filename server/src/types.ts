@@ -107,7 +107,7 @@ export const WS_MESSAGE_TYPES = {
 export const EXPIRATION_TIMES = {
   globalMessage: 60 * 60, // 1 hour
   roomMessage: 12 * 60 * 60, // 12 hours
-  file: 60 * 60, // 1 hour
+  file: 12 * 60 * 60, // 12 hours (Matched to room lifespan)
   room: 12 * 60 * 60, // 12 hours
   user: 24 * 60 * 60, // 24 hours
 };
