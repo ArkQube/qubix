@@ -857,6 +857,13 @@ app.get('/api/download', async (req, res) => {
   }
 });
 
+// Helper to prevent binary corruption: explicitly assign Cloudinary resource types
+function getCloudinaryResourceType(mimetype: string): 'image' | 'video' | 'raw' {
+  if (mimetype.startsWith('image/')) return 'image';
+  if (mimetype.startsWith('video/') || mimetype.startsWith('audio/')) return 'video';
+  return 'raw'; // PDF, ZIP, APK, DOCX, etc. stored byte-for-byte, no processing
+}
+
 // File upload endpoint
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
@@ -887,7 +894,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const result = await new Promise<any>((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
-          resource_type: 'auto',
+          resource_type: getCloudinaryResourceType(req.file!.mimetype),
           folder: 'arkion-uploads',
           expires_at: Math.floor(Date.now() / 1000) + EXPIRATION_TIMES.file,
         },
