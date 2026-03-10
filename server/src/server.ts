@@ -185,7 +185,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
         content: `${newUsername} joined the chat`,
         type: 'system',
         timestamp: Date.now(),
-        roomId: 'global', // ← FIX: client uses this to filter by current space
+        roomId: 'global',
       },
     },
   });
@@ -272,6 +272,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.SEND_MESSAGE, async (ws, userId, payload) =
         expiresAt,
         type,
         fileData: message.fileData,
+        roomId: roomId || 'global',
       },
       roomId: roomId || 'global',
     },
@@ -318,6 +319,10 @@ messageHandlers.set(WS_MESSAGE_TYPES.CREATE_ROOM, async (ws, userId, payload) =>
   );
 
   user.currentRoom = roomId;
+
+  globalUsers.delete(userId);
+  if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Set());
+  roomUsers.get(roomId)!.add(userId);
 
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.ROOM_CREATED,
@@ -427,6 +432,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
         content: `${user.username} joined the room`,
         type: 'system',
         timestamp: Date.now(),
+        roomId: room.id,
       },
     },
   });
@@ -596,6 +602,7 @@ async function leaveRoom(userId: string, roomId: string) {
           content: `${user.username} left the room`,
           type: 'system',
           timestamp: Date.now(),
+          roomId: roomId,
         },
       },
     });

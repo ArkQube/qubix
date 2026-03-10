@@ -91,6 +91,16 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       case 'auth_success':
         setCurrentUser(payload.user);
         localStorage.setItem('arkion_username', payload.user.username);
+        // If the user was in a private room but their socket dropped, automatically pull them back in
+        if (currentRoomRef.current) {
+          sendRaw({
+            type: 'join_room',
+            payload: {
+              code: currentRoomRef.current.code,
+              pin: currentRoomRef.current.pin
+            }
+          });
+        }
         break;
 
       case 'auth_error':
