@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import he from 'he';
+import Linkify from 'linkify-react';
 import type { Message, User } from '@/types';
 import { DEFAULT_CONFIG } from '@/types';
 import { formatTime, formatFileSize, getFileIcon, isPreviewableFile, getTimeRemaining } from '@/lib/utils';
@@ -34,7 +36,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
   const copyTextToClipboard = async () => {
     if (message.content) {
       try {
-        await navigator.clipboard.writeText(message.content);
+        await navigator.clipboard.writeText(he.decode(message.content));
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);
       } catch (err) {
@@ -161,7 +163,15 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
         >
           {/* Text Content */}
           {message.content && (
-            <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+            <div className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>
+              <Linkify options={{ 
+                target: '_blank', 
+                rel: 'noopener noreferrer',
+                className: 'underline font-medium hover:opacity-80 transition-opacity'
+              }}>
+                {he.decode(message.content)}
+              </Linkify>
+            </div>
           )}
 
           {/* File Attachment */}
