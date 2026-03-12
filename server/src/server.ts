@@ -805,6 +805,10 @@ app.post('/api/upload', upload.single('file'), async (req: express.Request, res:
     }
 
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (req.file.size > 10 * 1024 * 1024) {
+      console.warn(`[FIREWALL] IP ${ip} attempted a ${Math.round(req.file.size/1024/1024)}MB upload. Rejected.`);
+      return res.status(413).json({ error: 'Payload Too Large: Exceeds 10MB limit.' });
+    }
 
     const { sessionId, roomId } = req.body;
     if (!sessionId) return res.status(401).json({ error: 'Not authenticated' });

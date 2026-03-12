@@ -10,10 +10,12 @@ import {
 } from 'lucide-react';
 import { formatFileSize, validateFileSize } from '@/lib/utils';
 import { DEFAULT_CONFIG } from '@/types';
+import imageCompression from 'browser-image-compression';
+import { useWebSocket } from '@/contexts/WebSocketContext';
 
 interface ChatInputProps {
-  onSendMessage: (content: string, fileData?: any) => void;
-  onUploadFile: (file: File) => Promise<any>;
+  onSendMessage: (content: string, fileData?: any, ghostId?: string) => void;
+  onUploadFile: (file: File, uploadId?: string) => Promise<any>;
   uploadProgress: { progress: number; status: string; error?: string } | null;
   disabled?: boolean;
 }
@@ -24,34 +26,64 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const activeUploads = useRef(new Set<string>());
+  const { pausePing, resumePing } = useWebSocket();
 
   const handleSend = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
 
-    let fileData = null;
-
-    // Upload file if selected
-    if (selectedFile) {
-      setIsUploading(true);
-      try {
-        fileData = await onUploadFile(selectedFile);
-      } catch (err) {
-        console.error('File upload failed:', err);
-        setIsUploading(false);
-        return;
-      }
-      setIsUploading(false);
-      setSelectedFile(null);
-    }
-
-    // Send message
-    onSendMessage(message, fileData);
+    const currentMessage = message;
+    const currentFile = selectedFile;
+    
+    // Clear input state immediately for instant UX perception
     setMessage('');
-
-    // Reset textarea height
+    setSelectedFile(null);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
+
+    let fileData = null;
+    let uploadId = undefined;
+
+    // ─── 1. Core Upload Compression & UUID Pipeline ───────────────────────────
+    if (currentFile) {
+      uploadId = crypto.randomUUID();
+      
+      // Strict Deduplication — physically prevents 2x button taps generating 2 messages
+      if (activeUploads.current.has(uploadId)) return; 
+      activeUploads.current.add(uploadId);
+
+      setIsUploading(true);
+
+      try {
+        let fileToUpload = currentFile;
+        // Smart Image Compression
+        if (currentFile.type.startsWith('image/')) {
+          try {
+            fileToUpload = await imageCompression(currentFile, {
+              maxSizeMB: 1,
+              maxWidthOrHeight: 1920,
+              useWebWorker: true,
+            });
+          } catch (compressErr) {
+            console.warn('Image compression failed, utilizing the raw original file blob', compressErr);
+          }
+        }
+        
+        fileData = await onUploadFile(fileToUpload, uploadId);
+      } catch (err) {
+        console.error('File upload failed inside HTTP stream:', err);
+      } finally {
+        activeUploads.current.delete(uploadId);
+        setIsUploading(false);
+      }
+      
+      // If the compression or Cloudinary HTTP proxy failed, abruptly abort the WS broadcast
+      if (!fileData) return; 
+    }
+
+    // ─── 2. Final Message Broadcast ───────────────────────────────────────────
+    onSendMessage(currentMessage, fileData, uploadId);
   }, [message, selectedFile, onSendMessage, onUploadFile]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -61,7 +93,16 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     }
   }, [handleSend]);
 
+  const openFilePicker = useCallback(() => {
+    // Suspend WS network pings while the Native OS File Modal forcefully blocks JS execution
+    pausePing();
+    fileInputRef.current?.click();
+  }, [pausePing]);
+
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    // Restore the WS TCP connection heartbeat once the modal resolves
+    resumePing();
+    
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -71,7 +112,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     }
 
     setSelectedFile(file);
-  }, []);
+  }, [resumePing]);
 
   const handleRemoveFile = useCallback(() => {
     setSelectedFile(null);
@@ -130,7 +171,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
           variant="outline"
           size="icon"
           className="flex-shrink-0 h-10 w-10"
-          onClick={() => fileInputRef.current?.click()}
+          onClick={openFilePicker}
           disabled={disabled || isUploading || !!selectedFile}
         >
           <Paperclip className="w-5 h-5" />

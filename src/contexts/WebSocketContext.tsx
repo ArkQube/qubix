@@ -21,8 +21,10 @@ interface WebSocketContextType {
   leaveRoom: () => void;
   sendTyping: (isTyping: boolean) => void;
   deleteMessage: (messageId: string) => void;
-  uploadFile: (file: File) => Promise<any>;
+  uploadFile: (file: File, uploadId?: string) => Promise<any>;
   setUsername: (username: string) => void;
+  pausePing: () => void;
+  resumePing: () => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
@@ -261,7 +263,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         if (pingInterval.current) clearInterval(pingInterval.current);
         pingInterval.current = setInterval(() => {
           sendRaw({ type: 'ping', payload: {} });
-        }, 30_000);
+        }, 90_000); // 90s ping tolerance for mobile resilience
       };
 
       ws.current.onmessage = (event) => {
@@ -326,8 +328,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ─── Public actions ───────────────────────────────────────────────────────────
-  const sendChatMessage = useCallback((content: string, fileData?: any) => {
+  const sendChatMessage = useCallback((content: string, fileData?: any, ghostId?: string) => {
     if (!content.trim() && !fileData) return;
+
+    if (ghostId) {
+      setMessages(prev => prev.filter(m => m.id !== ghostId)); // Purge optimistic preview
+    }
+
     sendRaw({
       type: 'send_message',
       payload: {
@@ -362,10 +369,37 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     sendRaw({ type: 'delete_message', payload: { messageId } });
   }, [sendRaw]);
 
-  const uploadFile = useCallback(async (file: File): Promise<any> => {
-    const fileId = `upload-${Date.now()}`;
+  const uploadFile = useCallback(async (file: File, uploadId?: string): Promise<any> => {
+    const fileId = uploadId || `upload-${Date.now()}`;
+    const previewUrl = URL.createObjectURL(file);
 
     setUploadProgress({ fileId, progress: 0, status: 'uploading' });
+
+    // Inject optimistic visual preview into the chat feed instantly
+    if (currentUser) {
+      const ghostMessage: Message = {
+        id: fileId,
+        content: '',
+        sender: currentUser,
+        timestamp: Date.now(),
+        expiresAt: Date.now() + DEFAULT_CONFIG.fileLifetime,
+        type: 'file',
+        roomId: currentRoomRef.current?.id || 'global',
+        status: 'sending',
+        fileData: {
+          fileId,
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type,
+          url: previewUrl,
+          cloudinaryPublicId: '',
+          ownerId: currentUser.id,
+          uploadedAt: Date.now(),
+          expiresAt: Date.now() + DEFAULT_CONFIG.fileLifetime
+        }
+      };
+      setMessages(prev => [...prev, ghostMessage]);
+    }
 
     const formData = new FormData();
     formData.append('file', file);
@@ -391,9 +425,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       return data.file;
     } catch (err: any) {
       setUploadProgress({ fileId, progress: 0, status: 'error', error: err.message });
+      setMessages(prev => prev.filter(m => m.id !== fileId)); // Wipe ghost on fail
       throw err;
     }
-  }, []);
+  }, [currentUser]);
 
   const setUsername = useCallback((username: string) => {
     localStorage.setItem('arkion_username', username);
@@ -401,11 +436,39 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     connect();
   }, [connect, disconnect]);
 
+  const pausePing = useCallback(() => {
+    if (pingInterval.current) {
+      clearInterval(pingInterval.current);
+      pingInterval.current = null;
+    }
+  }, []);
+
+  const resumePing = useCallback(() => {
+    if (!pingInterval.current && ws.current?.readyState === WebSocket.OPEN) {
+      pingInterval.current = setInterval(() => {
+        sendRaw({ type: 'ping', payload: {} });
+      }, 90_000);
+    }
+  }, [sendRaw]);
+
   // Auto-connect on mount
   useEffect(() => {
     connect();
     return () => { disconnect(); };
-  }, []);
+  }, [connect, disconnect]);
+
+  // ─── Visibility Reconnect ──────────────────────────────────────────────────
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        connect();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [connect]);
 
   const value: WebSocketContextType = {
     connected,
@@ -427,6 +490,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     deleteMessage,
     uploadFile,
     setUsername,
+    pausePing,
+    resumePing,
   };
 
   return (

@@ -18,6 +18,7 @@ export interface Message {
   type: 'text' | 'file' | 'system';
   roomId?: string;
   fileData?: FileData;
+  status?: 'sending' | 'sent' | 'error';
 }
 
 export interface FileData {

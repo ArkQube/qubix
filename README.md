@@ -178,4 +178,4 @@ The React/Vite app is a static site and can be hosted easily on platforms like [
 4. Leave the **Root Directory** empty (as `./` the root).
 5. Click **Deploy**.
 
-Vercel will provide a scalable, live web URL (e.g., `https://qubix-chat.vercel.app`). Your ephemeral chat platform is now globally scalable and production-ready!
+Vercel will provide a scalable, live web URL (e.g., `https://arkion.vercel.app`). Your ephemeral chat platform is now globally scalable and production-ready!
