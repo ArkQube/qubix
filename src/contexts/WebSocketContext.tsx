@@ -25,6 +25,7 @@ interface WebSocketContextType {
   setUsername: (username: string) => void;
   pausePing: () => void;
   resumePing: () => void;
+  isSocketAlive: () => boolean;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
@@ -451,6 +452,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     }
   }, [sendRaw]);
 
+  // Check the raw WebSocket readyState — bypasses stale React state
+  // Critical for Android: when the tab resumes from suspension, React's
+  // `connected` state might still say `true` because setState hasn't flushed.
+  const isSocketAlive = useCallback((): boolean => {
+    return ws.current?.readyState === WebSocket.OPEN;
+  }, []);
+
   // Auto-connect on mount
   useEffect(() => {
     connect();
@@ -492,6 +500,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     setUsername,
     pausePing,
     resumePing,
+    isSocketAlive,
   };
 
   return (

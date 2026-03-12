@@ -27,7 +27,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeUploads = useRef(new Set<string>());
-  const { pausePing, resumePing, connected, connect: wsConnect } = useWebSocket();
+  const { pausePing, resumePing, isSocketAlive, connect: wsConnect } = useWebSocket();
 
   const handleSend = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
@@ -103,9 +103,12 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     // Restore the WS TCP connection heartbeat once the modal resolves
     resumePing();
     
-    // If the socket died while the file picker was open, reconnect immediately
-    if (!connected) {
-      console.log('[ChatInput] WS dropped during file picker, reconnecting...');
+    // ANDROID FIX: Check the raw WebSocket readyState, NOT React's `connected` state.
+    // On Android Chrome, the system file picker fully suspends the browser tab.
+    // When the tab resumes, React state might still say `connected = true` because
+    // setState hasn't flushed yet. `isSocketAlive()` reads ws.readyState directly.
+    if (!isSocketAlive()) {
+      console.log('[ChatInput] WS dead after Android file picker, reconnecting...');
       wsConnect();
     }
     
@@ -118,7 +121,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     }
 
     setSelectedFile(file);
-  }, [resumePing, connected, wsConnect]);
+  }, [resumePing, isSocketAlive, wsConnect]);
 
   const handleRemoveFile = useCallback(() => {
     setSelectedFile(null);
