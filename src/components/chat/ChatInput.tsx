@@ -27,7 +27,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeUploads = useRef(new Set<string>());
-  const { pausePing, resumePing } = useWebSocket();
+  const { pausePing, resumePing, connected, connect: wsConnect } = useWebSocket();
 
   const handleSend = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
@@ -103,6 +103,12 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     // Restore the WS TCP connection heartbeat once the modal resolves
     resumePing();
     
+    // If the socket died while the file picker was open, reconnect immediately
+    if (!connected) {
+      console.log('[ChatInput] WS dropped during file picker, reconnecting...');
+      wsConnect();
+    }
+    
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -112,7 +118,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     }
 
     setSelectedFile(file);
-  }, [resumePing]);
+  }, [resumePing, connected, wsConnect]);
 
   const handleRemoveFile = useCallback(() => {
     setSelectedFile(null);

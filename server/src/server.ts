@@ -643,10 +643,20 @@ async function getRoomMessages(roomId: string, limit = 50): Promise<any[]> {
 
 // ─── WebSocket connection handler ─────────────────────────────────────────────
 
-wss.on('connection', (ws: WebSocket) => {
+wss.on('connection', (ws: any) => {
   console.log('New WebSocket connection');
 
+  // Mark alive on connect — the heartbeat interval will check this
+  ws.isAlive = true;
+
+  ws.on('pong', () => {
+    ws.isAlive = true; // Browser responded to our native ping
+  });
+
   ws.on('message', async (data: Buffer) => {
+    // Any received message also proves the socket is alive
+    ws.isAlive = true;
+
     try {
       const message: WebSocketClientMessage = JSON.parse(data.toString());
       const { type, payload } = message;
@@ -706,22 +716,33 @@ wss.on('connection', (ws: WebSocket) => {
     }
   });
 
-  ws.on('error', (err) => console.error('WebSocket error:', err));
+  ws.on('error', (err: Error) => console.error('WebSocket error:', err));
 });
 
-// ─── Server-Side WS Keep-Alive ──────────────────────────────────────────────────
+// ─── Server-Side WS Heartbeat ───────────────────────────────────────────────────
 // WHY: When mobile users open the native File Picker, iOS/Android entirely pauses
-// the browser's JavaScript execution thread. If paused for >60s, Render's Load
-// Balancer drops the socket due to idleness. By having the Node server emit native
-// WS network pings, the mobile OS responds natively without needing the JS thread,
-// keeping the connection permanently alive.
-setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.ping(); // Emits an automated RFC6455 network ping frame
+// the browser's JavaScript execution thread. The client cannot send ANY messages
+// while the picker is open. Render's load balancer drops idle connections after ~60s.
+//
+// FIX: The server emits native RFC6455 ping frames every 25s. The browser's
+// network stack responds with pong frames automatically at the OS level — this
+// works even when JavaScript is completely frozen. This keeps the TCP connection
+// alive through any load balancer.
+//
+// Additionally: sockets that fail to respond to TWO consecutive pings (50s) are
+// terminated to clean up zombie connections.
+const heartbeatInterval = setInterval(() => {
+  wss.clients.forEach((client: any) => {
+    if (client.isAlive === false) {
+      // This socket didn't respond to the last ping — it's dead
+      return client.terminate();
     }
+
+    // Mark as not-alive, then ping. If it responds, `pong` sets isAlive = true.
+    client.isAlive = false;
+    client.ping();
   });
-}, 30_000);
+}, 25_000); // 25s ensures we ping well before Render's ~60s idle cutoff
 
 // ─── HTTP Routes ──────────────────────────────────────────────────────────────
 
@@ -1005,6 +1026,7 @@ server.listen(PORT, () => {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully');
+  clearInterval(heartbeatInterval);
   wss.clients.forEach(ws => ws.close());
   await redis.quit();
   server.close(() => {
