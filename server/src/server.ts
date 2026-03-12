@@ -709,6 +709,20 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('error', (err) => console.error('WebSocket error:', err));
 });
 
+// ─── Server-Side WS Keep-Alive ──────────────────────────────────────────────────
+// WHY: When mobile users open the native File Picker, iOS/Android entirely pauses
+// the browser's JavaScript execution thread. If paused for >60s, Render's Load
+// Balancer drops the socket due to idleness. By having the Node server emit native
+// WS network pings, the mobile OS responds natively without needing the JS thread,
+// keeping the connection permanently alive.
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping(); // Emits an automated RFC6455 network ping frame
+    }
+  });
+}, 30_000);
+
 // ─── HTTP Routes ──────────────────────────────────────────────────────────────
 
 app.get('/ping', (req, res) => {
