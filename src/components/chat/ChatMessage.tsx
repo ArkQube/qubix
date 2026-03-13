@@ -178,25 +178,23 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
           {message.fileData && (
             <div className="mt-2">
               {isPreviewableFile(message.fileData.fileType) ? (
-                <div className="rounded-lg overflow-hidden bg-background/50 border border-border/50">
-                  {/* FIX: Removed fixed aspect ratio / object-contain letterboxing.
-                      Let the image naturally dictate its height up to max-h-80. */}
+                <div className="rounded-lg overflow-hidden relative group/image">
                   <img
                     src={message.fileData.url}
                     alt={message.fileData.fileName}
                     className="w-full max-w-full max-h-[20rem] object-cover block"
                     loading="lazy"
                   />
-                  <div className="p-2 flex items-center justify-between bg-background/95 backdrop-blur-sm border-t border-border/50">
+                  <div className="absolute bottom-0 left-0 right-0 p-2 flex items-center justify-between bg-black/60 backdrop-blur-md text-white opacity-100 transition-opacity">
                     <div className="flex items-center gap-2 text-xs min-w-0">
                       <div className="shrink-0">{renderFileIcon(message.fileData.fileType)}</div>
-                      <span className="break-all max-w-[150px]">{message.fileData.fileName}</span>
-                      <span className="text-muted-foreground shrink-0">({formatFileSize(message.fileData.fileSize)})</span>
+                      <span className="break-all max-w-[150px] font-medium">{message.fileData.fileName}</span>
+                      <span className="text-white/70 shrink-0">({formatFileSize(message.fileData.fileSize)})</span>
                     </div>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-6 w-6"
+                      className="h-6 w-6 text-white hover:text-white hover:bg-white/20"
                       onClick={downloadFile}
                     >
                       <Download className="w-4 h-4" />
