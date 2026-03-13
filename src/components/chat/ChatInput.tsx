@@ -116,26 +116,18 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
       pickerOpenRef.current = false;
 
       resumePing();
-
-      if (!isSocketAlive()) {
-        console.log('[ChatInput] WS dead after file picker (focus), reconnecting…');
-        wsConnect();
-      }
+      wsConnect();
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
   }, [resumePing, isSocketAlive, wsConnect]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    // The focus handler already restored pings & reconnected, but call again
-    // as belt-and-suspenders in case focus fired before the socket state settled.
+    // The focus handler usually catches this first, but we call it here 
+    // too for belt-and-suspenders reliability.
     pickerOpenRef.current = false;
     resumePing();
-
-    if (!isSocketAlive()) {
-      console.log('[ChatInput] WS dead after Android file picker, reconnecting…');
-      wsConnect();
-    }
+    wsConnect();
     
     const file = e.target.files?.[0];
     if (!file) return;

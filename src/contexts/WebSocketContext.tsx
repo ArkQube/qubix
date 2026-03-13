@@ -232,7 +232,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
   // ─── Connect ─────────────────────────────────────────────────────────────────
   const connect = useCallback(() => {
-    if (ws.current?.readyState === WebSocket.OPEN) return;
+    const currentState = ws.current?.readyState;
+    if (currentState === WebSocket.OPEN || currentState === WebSocket.CONNECTING) return;
 
     setConnecting(true);
     setError(null);
@@ -264,7 +265,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         if (pingInterval.current) clearInterval(pingInterval.current);
         pingInterval.current = setInterval(() => {
           sendRaw({ type: 'ping', payload: {} });
-        }, 90_000); // 90s ping tolerance for mobile resilience
+        }, 20_000); // 20s for faster dead-socket detection on mobile focus recovery
       };
 
       ws.current.onmessage = (event) => {
@@ -448,7 +449,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     if (!pingInterval.current && ws.current?.readyState === WebSocket.OPEN) {
       pingInterval.current = setInterval(() => {
         sendRaw({ type: 'ping', payload: {} });
-      }, 90_000);
+      }, 20_000);
     }
   }, [sendRaw]);
 

@@ -141,19 +141,50 @@ const messageHandlers: Map<string, WSMessageHandler> = new Map();
 // Authentication handler
 messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
   const { sessionId, username } = payload;
-  const userId = generateId();
-  const newSessionId = sessionId || generateSessionId();
-  const newUsername = username || generateAnonymousUsername();
 
-  const user: ServerUser = {
-    id: userId,
-    username: newUsername,
-    sessionId: newSessionId,
-    socketId: userId,
-    joinedAt: Date.now(),
-  };
+  let user: ServerUser | undefined;
+  let userId: string;
 
-  users.set(userId, user);
+  // ─── 1. Session Recovery: Reuse existing identity if sessionId match ───────
+  if (sessionId) {
+    for (const u of users.values()) {
+      if (u.sessionId === sessionId) {
+        user = u;
+        userId = u.id;
+        break;
+      }
+    }
+  }
+
+  if (user) {
+    userId = user.id;
+    // ─── 2. Deduplication: Sever old socket if user is re-connecting ─────────
+    const oldWs = clients.get(userId);
+    if (oldWs && oldWs !== ws && oldWs.readyState === WebSocket.OPEN) {
+      console.log(`[AUTH] Superseding old socket for user ${user.username}`);
+      oldWs.close();
+    }
+    
+    // Allow name changes on reconnect
+    if (username && username !== user.username) {
+      user.username = username;
+    }
+  } else {
+    // ─── 3. New Identity Initialization ─────────────────────────────────────
+    userId = generateId();
+    const newSessionId = sessionId || generateSessionId();
+    const newUsername = username || generateAnonymousUsername();
+
+    user = {
+      id: userId,
+      username: newUsername,
+      sessionId: newSessionId,
+      socketId: userId,
+      joinedAt: Date.now(),
+    };
+    users.set(userId, user);
+  }
+
   clients.set(userId, ws);
   socketUserMap.set(ws, userId);
   globalUsers.add(userId);
@@ -169,26 +200,30 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
     payload: {
       user: {
         id: userId,
-        username: newUsername,
-        sessionId: newSessionId,
+        username: user.username,
+        sessionId: user.sessionId,
         joinedAt: user.joinedAt,
       },
     },
   });
 
-  broadcastToAll({
-    type: WS_MESSAGE_TYPES.USER_JOINED,
-    payload: {
-      user: { id: userId, username: newUsername },
-      message: {
-        id: generateId(),
-        content: `${newUsername} joined the chat`,
-        type: 'system',
-        timestamp: Date.now(),
-        roomId: 'global',
+  // Only broadcast join if it's truly a NEW session, or if they were offline long enough
+  // For now, simpler: broadcast if a new user entry was created.
+  if (!sessionId || !users.has(userId)) {
+    broadcastToAll({
+      type: WS_MESSAGE_TYPES.USER_JOINED,
+      payload: {
+        user: { id: userId, username: user.username },
+        message: {
+          id: generateId(),
+          content: `${user.username} joined the chat`,
+          type: 'system',
+          timestamp: Date.now(),
+          roomId: 'global',
+        },
       },
-    },
-  });
+    });
+  }
 
   const globalMessages = await getGlobalMessages();
   sendToClient(ws, {
@@ -196,7 +231,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
     payload: { messages: globalMessages, roomId: 'global' },
   });
 
-  console.log(`User authenticated: ${newUsername} (${userId})`);
+  console.log(`User authenticated: ${user.username} (${userId}) ${sessionId ? '[RECOVERY]' : '[NEW]'}`);
 });
 
 // Send message handler
