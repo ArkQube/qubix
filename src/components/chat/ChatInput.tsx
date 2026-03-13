@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { 
@@ -27,6 +27,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeUploads = useRef(new Set<string>());
+  const pickerOpenRef = useRef(false);
   const { pausePing, resumePing, isSocketAlive, connect: wsConnect } = useWebSocket();
 
   const handleSend = useCallback(async () => {
@@ -95,20 +96,44 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
 
   const openFilePicker = useCallback(() => {
     // Suspend WS network pings while the Native OS File Modal forcefully blocks JS execution
+    pickerOpenRef.current = true;
     pausePing();
     fileInputRef.current?.click();
   }, [pausePing]);
 
+  // ─── ANDROID FIX: Window focus recovery ──────────────────────────────────
+  // On Android Chrome, the system file picker fully suspends the browser tab
+  // (JS, timers, AND the network stack). Native WebSocket pong frames are NOT
+  // sent while suspended, so the server's heartbeat will terminate the socket
+  // after ~2 missed pings.
+  //
+  // The `focus` event fires when the picker closes — BOTH on file selection
+  // AND on cancel (where `onChange` never fires). This is the single reliable
+  // hook to resume pings, detect a dead socket, and reconnect.
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      if (!pickerOpenRef.current) return;
+      pickerOpenRef.current = false;
+
+      resumePing();
+
+      if (!isSocketAlive()) {
+        console.log('[ChatInput] WS dead after file picker (focus), reconnecting…');
+        wsConnect();
+      }
+    };
+    window.addEventListener('focus', handleWindowFocus);
+    return () => window.removeEventListener('focus', handleWindowFocus);
+  }, [resumePing, isSocketAlive, wsConnect]);
+
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    // Restore the WS TCP connection heartbeat once the modal resolves
+    // The focus handler already restored pings & reconnected, but call again
+    // as belt-and-suspenders in case focus fired before the socket state settled.
+    pickerOpenRef.current = false;
     resumePing();
-    
-    // ANDROID FIX: Check the raw WebSocket readyState, NOT React's `connected` state.
-    // On Android Chrome, the system file picker fully suspends the browser tab.
-    // When the tab resumes, React state might still say `connected = true` because
-    // setState hasn't flushed yet. `isSocketAlive()` reads ws.readyState directly.
+
     if (!isSocketAlive()) {
-      console.log('[ChatInput] WS dead after Android file picker, reconnecting...');
+      console.log('[ChatInput] WS dead after Android file picker, reconnecting…');
       wsConnect();
     }
     

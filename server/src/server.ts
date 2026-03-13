@@ -742,7 +742,7 @@ const heartbeatInterval = setInterval(() => {
     client.isAlive = false;
     client.ping();
   });
-}, 25_000); // 25s ensures we ping well before Render's ~60s idle cutoff
+}, 55_000); // 55s — gives mobile clients ~110s before termination (Android file picker freezes network)
 
 // ─── HTTP Routes ──────────────────────────────────────────────────────────────
 
