@@ -174,18 +174,20 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
             </div>
           )}
 
-          {/* File Attachment */}
+        {/* File Attachment */}
           {message.fileData && (
             <div className="mt-2">
               {isPreviewableFile(message.fileData.fileType) ? (
-                <div className="rounded-lg overflow-hidden bg-background/50">
+                <div className="rounded-lg overflow-hidden bg-background/50 border border-border/50">
+                  {/* FIX: Removed fixed aspect ratio / object-contain letterboxing.
+                      Let the image naturally dictate its height up to max-h-80. */}
                   <img
                     src={message.fileData.url}
                     alt={message.fileData.fileName}
-                    className="w-full block max-w-full max-h-64 object-contain bg-background/20"
+                    className="w-full max-w-full max-h-[20rem] object-cover block"
                     loading="lazy"
                   />
-                  <div className="p-2 flex items-center justify-between bg-background/80">
+                  <div className="p-2 flex items-center justify-between bg-background/95 backdrop-blur-sm border-t border-border/50">
                     <div className="flex items-center gap-2 text-xs min-w-0">
                       <div className="shrink-0">{renderFileIcon(message.fileData.fileType)}</div>
                       <span className="break-all max-w-[150px]">{message.fileData.fileName}</span>
