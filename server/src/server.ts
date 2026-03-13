@@ -207,9 +207,8 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
     },
   });
 
-  // Only broadcast join if it's truly a NEW session, or if they were offline long enough
-  // For now, simpler: broadcast if a new user entry was created.
-  if (!sessionId || !users.has(userId)) {
+  // Only broadcast join if it's truly a NEW identity (not a session recovery)
+  if (!sessionId) {
     broadcastToAll({
       type: WS_MESSAGE_TYPES.USER_JOINED,
       payload: {
@@ -489,10 +488,11 @@ messageHandlers.set(WS_MESSAGE_TYPES.LEAVE_ROOM, async (ws, userId, payload) => 
   const user = users.get(userId);
   if (!user || !user.currentRoom) { sendError(ws, 'Not in a room'); return; }
 
-  await leaveRoom(userId, user.currentRoom);
+  const roomId = user.currentRoom; // Save before leaveRoom() clears it
+  await leaveRoom(userId, roomId);
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.ROOM_LEFT,
-    payload: { roomId: user.currentRoom },
+    payload: { roomId },
   });
 });
 
@@ -745,7 +745,7 @@ wss.on('connection', (ws: any) => {
         // timer cleans them up.
         globalUsers.delete(id);
 
-        const gracePeriod = setTimeout(() => {
+        const _gracePeriod = setTimeout(() => {
           // If the user reconnected, clients.has(id) will be true again
           if (clients.has(id)) return; // They came back — do nothing
 

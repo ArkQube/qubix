@@ -7,11 +7,14 @@ Qubix is a privacy-first, ephemeral real-time communication platform enabling te
 *   **Ephemeral Messaging:** Messages and files automatically expire and vanish after a set period (1 hour for Global, 12 hours for Private Rooms).
 *   **Anonymous Identity:** No sign-ups required. Users are assigned an anonymous, editable identity tied to their current browser session.
 *   **Real-time Communication:** Powered by WebSockets for lightning-fast, bi-directional message broadcasting.
-*   **File Sharing:** Securely upload and share images, documents, and videos. Files are stored temporarily on Cloudinary.
+*   **File Sharing:** Securely upload and share images, documents, and videos. Files are stored temporarily on Cloudinary with automatic image compression.
 *   **Private Rooms:** Create isolated rooms with a unique 5-character code and an optional 4-digit PIN for extra security.
-*   **WhatsApp-Style Rendering Engine:** Chat DOM is anchored to the bottom using `scrollIntoView` reverse-rendering. Message arrays are memory-capped (e.g., last 50) for lag-free instant loads.
-*   **Mobile-Native UI:** Replaced broken desktop CSS `:hover` states with native React `isActive` touch-toggle overlays for message actions (Copy/Delete).
+*   **Session Recovery:** Persistent `sessionId` allows seamless identity restoration across page reloads and mobile suspensions. A 2-minute server-side grace period preserves user identity during brief disconnects.
+*   **Mobile-First Design:** Resilient WebSocket recovery handles Android/iOS file picker suspensions. Native RFC6455 server pings keep connections alive through load balancer idle timeouts.
+*   **WhatsApp-Style Rendering:** Chat DOM uses `scrollIntoView` reverse-rendering, message arrays are memory-capped (last 50) for lag-free instant loads.
+*   **Touch-Native UI:** React `isActive` touch-toggle overlays for message actions (Copy/Delete) replace broken desktop CSS `:hover` states on mobile.
 *   **Advanced IP & Storage Defenses:** Built-in safeguards against abuse, spam, and Cloudinary quota exhaustion.
+*   **Dark/Light Theme:** Toggle between themes with `next-themes`, persisting user preference across sessions.
 
 ## 🛡️ 3-Layer Storage & Abuse Defense System
 
@@ -41,6 +44,7 @@ Qubix/
 │   ├── components/           # UI Components
 │   │   ├── chat/             # Chat UI (ChatContainer, ChatMessage, ChatInput)
 │   │   ├── rooms/            # Room Management UI (Create/Join rooms)
+│   │   ├── settings/         # User Settings (Username, Theme)
 │   │   └── ui/               # shadcn/ui primitives (Buttons, Inputs, Dialogs)
 │   ├── contexts/
 │   │   └── WebSocketContext.tsx # Central brain mapping WS events to React State
@@ -75,6 +79,13 @@ A high-performance Node.js server acts as the central hub for all real-time mess
 *   **Database (In-Memory Datastore):** Redis (via Upstash). Used exclusively to store temporary messages and room metadata. **Crucially, Redis handles the automatic TTL (Time-To-Live) expiration of data.**
 *   **File CDN:** Cloudinary. Used to temporarily host uploaded files.
 *   **Key Responsibilities:** Authenticating persistent user sessions (via `sessionId`), managing chat room subscriptions (Pub/Sub pattern over WebSockets), handling REST API endpoints for file uploads (`multer` memory storage -> Cloudinary API), proxying file downloads to prevent direct CDN exposure, and aggressively defending storage quotas via Node-Cron.
+
+### Mobile WebSocket Resilience
+On Android/iOS, opening the native file picker suspends the browser's JavaScript execution and can kill TCP connections. Qubix handles this with a multi-layered recovery system:
+*   **Server-side RFC6455 Pings (20s interval):** Native WebSocket ping frames keep connections alive through Render's load balancer, even when client JS is frozen.
+*   **2-Minute Grace Period:** On disconnect, user identity is preserved in memory for 2 minutes, allowing seamless session recovery via `sessionId`.
+*   **Silent Reconnect (`suppressDisconnectUI`):** When the file picker is active, socket drops are handled silently — the user never sees "Connection Lost".
+*   **PIN Caching:** When in a PIN-protected room, the client caches the PIN in memory to seamlessly rejoin after reconnection.
 
 ## ⚙️ Local Development Setup
 
@@ -124,7 +135,7 @@ To run Qubix locally, you will need concurrently running terminals for the Front
     ```bash
     npm install
     ```
-3.  Ensure your `src/types.ts` config points to the local backend:
+3.  Ensure your `src/types/index.ts` config points to the local backend:
     ```typescript
     export const DEFAULT_CONFIG = {
       wsUrl: 'ws://localhost:3000/ws',
@@ -159,7 +170,7 @@ Because the backend relies on persistent WebSocket connections, a platform like 
 8. Deploy. Render will provide a live URL (e.g., `https://qubix-api.onrender.com`).
 
 ### 2. Connecting Frontend to the Live Backend
-Before deploying the frontend, update `src/types.ts` to point to the newly deployed Render backend:
+Before deploying the frontend, update `src/types/index.ts` to point to the newly deployed Render backend:
 ```typescript
 export const DEFAULT_CONFIG = {
   wsUrl: 'wss://qubix-api.onrender.com/ws', // Note the 'wss://' for secure WebSockets
@@ -179,3 +190,7 @@ The React/Vite app is a static site and can be hosted easily on platforms like [
 5. Click **Deploy**.
 
 Vercel will provide a scalable, live web URL (e.g., `https://arkion.vercel.app`). Your ephemeral chat platform is now globally scalable and production-ready!
+
+## 📄 License
+
+This project is open source and available under the [MIT License](LICENSE).

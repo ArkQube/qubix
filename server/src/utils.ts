@@ -1,7 +1,5 @@
 // Server-side utility functions for Arkion
 
-// Server-side utility functions for Arkion
-
 // Generate random anonymous username
 export function generateAnonymousUsername(): string {
   const adjective = USERNAME_ADJECTIVES[Math.floor(Math.random() * USERNAME_ADJECTIVES.length)];
