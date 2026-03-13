@@ -760,27 +760,33 @@ wss.on('connection', (ws: any) => {
 // ─── Server-Side WS Heartbeat ───────────────────────────────────────────────────
 // WHY: When mobile users open the native File Picker, iOS/Android entirely pauses
 // the browser's JavaScript execution thread. The client cannot send ANY messages
-// while the picker is open. Render's load balancer drops idle connections after ~60s.
+// while the picker is open. Render's load balancer drops idle connections after
+// approximately 30–60s of no WebSocket frames.
 //
-// FIX: The server emits native RFC6455 ping frames every 25s. The browser's
+// FIX: The server emits native RFC6455 ping frames every 20s. The browser's
 // network stack responds with pong frames automatically at the OS level — this
 // works even when JavaScript is completely frozen. This keeps the TCP connection
 // alive through any load balancer.
 //
-// Additionally: sockets that fail to respond to TWO consecutive pings (50s) are
-// terminated to clean up zombie connections.
+// Termination: sockets that miss THREE consecutive pings (60s total) are killed
+// to clean up genuine zombie connections.
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((client: any) => {
     if (client.isAlive === false) {
-      // This socket didn't respond to the last ping — it's dead
-      return client.terminate();
+      client.missedPings = (client.missedPings || 0) + 1;
+      if (client.missedPings >= 3) {
+        // Dead for 60s+ — terminate
+        return client.terminate();
+      }
+    } else {
+      client.missedPings = 0;
     }
 
     // Mark as not-alive, then ping. If it responds, `pong` sets isAlive = true.
     client.isAlive = false;
     client.ping();
   });
-}, 55_000); // 55s — gives mobile clients ~110s before termination (Android file picker freezes network)
+}, 20_000); // 20s — keeps Render proxy alive (their idle timeout is ~30-60s)
 
 // ─── HTTP Routes ──────────────────────────────────────────────────────────────
 
