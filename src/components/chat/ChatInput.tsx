@@ -28,7 +28,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeUploads = useRef(new Set<string>());
   const pickerOpenRef = useRef(false);
-  const { pausePing, resumePing, isSocketAlive, connect: wsConnect } = useWebSocket();
+  const { pausePing, resumePing, forceReconnect } = useWebSocket();
 
   const handleSend = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
@@ -61,10 +61,15 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
         // Smart Image Compression
         if (currentFile.type.startsWith('image/')) {
           try {
-            fileToUpload = await imageCompression(currentFile, {
+            const compressedBlob = await imageCompression(currentFile, {
               maxSizeMB: 1,
               maxWidthOrHeight: 1920,
               useWebWorker: true,
+            });
+            // Restore original filename (browser-image-compression often drops it)
+            fileToUpload = new File([compressedBlob], currentFile.name, {
+              type: compressedBlob.type,
+              lastModified: Date.now(),
             });
           } catch (compressErr) {
             console.warn('Image compression failed, utilizing the raw original file blob', compressErr);
@@ -116,18 +121,18 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
       pickerOpenRef.current = false;
 
       resumePing();
-      wsConnect();
+      forceReconnect();
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
-  }, [resumePing, isSocketAlive, wsConnect]);
+  }, [resumePing, forceReconnect]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     // The focus handler usually catches this first, but we call it here 
     // too for belt-and-suspenders reliability.
     pickerOpenRef.current = false;
     resumePing();
-    wsConnect();
+    forceReconnect();
     
     const file = e.target.files?.[0];
     if (!file) return;
@@ -138,7 +143,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     }
 
     setSelectedFile(file);
-  }, [resumePing, isSocketAlive, wsConnect]);
+  }, [resumePing, forceReconnect]);
 
   const handleRemoveFile = useCallback(() => {
     setSelectedFile(null);

@@ -26,6 +26,7 @@ interface WebSocketContextType {
   pausePing: () => void;
   resumePing: () => void;
   isSocketAlive: () => boolean;
+  forceReconnect: () => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
@@ -460,6 +461,18 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     return ws.current?.readyState === WebSocket.OPEN;
   }, []);
 
+  const forceReconnect = useCallback(() => {
+    console.log('[WebSocketContext] Forcing violent reconnect (likely mobile resume)');
+    if (ws.current) {
+      // Forcefully terminate the stale connection without waiting for OS TCP timeout
+      ws.current.close();
+      ws.current = null;
+    }
+    setConnected(false);
+    setConnecting(false);
+    connect();
+  }, [connect]);
+
   // Auto-connect on mount
   useEffect(() => {
     connect();
@@ -502,6 +515,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     pausePing,
     resumePing,
     isSocketAlive,
+    forceReconnect,
   };
 
   return (
