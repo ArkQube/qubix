@@ -27,6 +27,7 @@ interface WebSocketContextType {
   resumePing: () => void;
   isSocketAlive: () => boolean;
   forceReconnect: () => void;
+  suppressDisconnectUI: React.MutableRefObject<boolean>;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
@@ -48,6 +49,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [roomParticipants, setRoomParticipants] = useState<User[]>([]);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+
+  // When true, onclose suppresses the "Connection Lost" UI and silently reconnects.
+  // Set by ChatInput when the file picker is open (Android kills the socket).
+  const suppressDisconnectUI = useRef(false);
 
   // ─── FIX 1: keep a ref that always reflects the latest currentRoom ──────────
   //
@@ -282,19 +287,34 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       ws.current.onclose = () => {
         console.log('WebSocket disconnected');
-        setConnected(false);
-        setConnecting(false);
 
         if (pingInterval.current) {
           clearInterval(pingInterval.current);
           pingInterval.current = null;
         }
 
-        if (!reconnectTimeout.current) {
-          reconnectTimeout.current = setTimeout(() => {
-            reconnectTimeout.current = null;
-            connect();
-          }, 3000);
+        if (suppressDisconnectUI.current) {
+          // File picker is active — Android killed the socket but we don't
+          // want the user to see "Connection Lost". Reconnect instantly
+          // and silently in the background.
+          console.log('[WS] Suppressed disconnect UI (file picker active). Reconnecting instantly...');
+          ws.current = null;
+          // Don't touch connected/connecting state — keep UI stable
+          if (!reconnectTimeout.current) {
+            reconnectTimeout.current = setTimeout(() => {
+              reconnectTimeout.current = null;
+              connect();
+            }, 100); // near-instant
+          }
+        } else {
+          setConnected(false);
+          setConnecting(false);
+          if (!reconnectTimeout.current) {
+            reconnectTimeout.current = setTimeout(() => {
+              reconnectTimeout.current = null;
+              connect();
+            }, 3000);
+          }
         }
       };
 
@@ -468,15 +488,17 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const forceReconnect = useCallback(() => {
-    console.log('[WebSocketContext] Forcing violent reconnect (likely mobile resume)');
+    console.log('[WebSocketContext] Forcing reconnect (likely mobile resume)');
+    // Suppress the "Connection Lost" UI during this forced reconnect
+    suppressDisconnectUI.current = true;
     if (ws.current) {
-      // Forcefully terminate the stale connection without waiting for OS TCP timeout
       ws.current.close();
       ws.current = null;
     }
-    setConnected(false);
-    setConnecting(false);
+    // Don't set connected=false — keep UI stable during reconnect
     connect();
+    // Reset suppression after a short delay (connection should be established by then)
+    setTimeout(() => { suppressDisconnectUI.current = false; }, 5000);
   }, [connect]);
 
   // Auto-connect on mount
@@ -522,6 +544,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     resumePing,
     isSocketAlive,
     forceReconnect,
+    suppressDisconnectUI,
   };
 
   return (

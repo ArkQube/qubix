@@ -28,7 +28,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeUploads = useRef(new Set<string>());
   const pickerOpenRef = useRef(false);
-  const { pausePing, resumePing, forceReconnect } = useWebSocket();
+  const { pausePing, resumePing, forceReconnect, suppressDisconnectUI } = useWebSocket();
 
   const handleSend = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
@@ -108,9 +108,10 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     // Suspend WS network pings while the Native OS File Modal forcefully blocks JS execution
     pickerOpenRef.current = true;
     pickerOpenedAtRef.current = Date.now();
+    suppressDisconnectUI.current = true; // Don't show "Connection Lost" while picker is open
     pausePing();
     fileInputRef.current?.click();
-  }, [pausePing]);
+  }, [pausePing, suppressDisconnectUI]);
 
   // ─── ANDROID FIX: Window focus recovery ──────────────────────────────────
   // PROBLEM 1 — Spurious focus: On some Android devices, calling
@@ -144,6 +145,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
         
         console.log('[ChatInput] Picker closed/cancelled. Reconnecting...');
         pickerOpenRef.current = false;
+        suppressDisconnectUI.current = false;
         resumePing();
         forceReconnect();
       }, 300);
@@ -157,6 +159,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     
     // We captured the file! Now we can safely trigger the reconnect.
     pickerOpenRef.current = false;
+    suppressDisconnectUI.current = false;
     resumePing();
     // Only force reconnect if the picker was open long enough to have
     // potentially killed the socket (> 5 seconds of OS suspension).
