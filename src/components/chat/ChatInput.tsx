@@ -107,29 +107,38 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   }, [pausePing]);
 
   // ─── ANDROID FIX: Window focus recovery ──────────────────────────────────
-  // On Android Chrome, the system file picker fully suspends the browser tab
-  // (JS, timers, AND the network stack). Native WebSocket pong frames are NOT
-  // sent while suspended, so the server's heartbeat will terminate the socket
-  // after ~2 missed pings.
+  // The `focus` event fires when the native file picker closes.
+  // CRITICAL RACE CONDITION: On Android/Chrome, `focus` fires BEFORE the
+  // file input's `change` event. If we violently `forceReconnect()` here instantly,
+  // `connected` becomes false, React disables our input, and the `change`
+  // event is permanently lost, dropping the user's file!
   //
-  // The `focus` event fires when the picker closes — BOTH on file selection
-  // AND on cancel (where `onChange` never fires). This is the single reliable
-  // hook to resume pings, detect a dead socket, and reconnect.
+  // Fix: We wait 500ms. If `change` fires first, it handles the file BEFORE
+  // triggering reconnect. If the user cancelled the picker, the timeout catches it.
+  const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const handleWindowFocus = () => {
       if (!pickerOpenRef.current) return;
-      pickerOpenRef.current = false;
 
-      resumePing();
-      forceReconnect();
+      if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
+      focusTimeoutRef.current = setTimeout(() => {
+        if (!pickerOpenRef.current) return; // Handled by onChange already
+        
+        console.log('[ChatInput] Picker cancelled/closed without file. Reconnecting...');
+        pickerOpenRef.current = false;
+        resumePing();
+        forceReconnect();
+      }, 500);
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
   }, [resumePing, forceReconnect]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    // The focus handler usually catches this first, but we call it here 
-    // too for belt-and-suspenders reliability.
+    if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
+    
+    // We captured the file! Now we can safely trigger the reconnect.
     pickerOpenRef.current = false;
     resumePing();
     forceReconnect();
