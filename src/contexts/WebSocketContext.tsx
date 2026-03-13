@@ -57,6 +57,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   // entirely — ref.current is always the live value.
   //
   const currentRoomRef = useRef<Room | null>(null);
+  const currentRoomPinRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     currentRoomRef.current = currentRoom;
   }, [currentRoom]);
@@ -101,7 +102,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
             type: 'join_room',
             payload: {
               code: currentRoomRef.current.code,
-              pin: currentRoomRef.current.pin
+              pin: currentRoomPinRef.current // Use the strictly cached plain-text PIN
             }
           });
         }
@@ -201,6 +202,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       case 'room_left':
         setCurrentRoom(null);
+        currentRoomPinRef.current = undefined;
         setMessages([]);
         setRoomParticipants([]);
         setTypingUsers([]);
@@ -326,6 +328,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     setCurrentUser(null);
     setMessages([]);
     setCurrentRoom(null);
+    currentRoomPinRef.current = undefined;
     setRoomParticipants([]);
     setTypingUsers([]);
   }, []);
@@ -350,14 +353,17 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }, [sendRaw]);
 
   const createRoom = useCallback((name?: string, pin?: string) => {
+    currentRoomPinRef.current = pin;
     sendRaw({ type: 'create_room', payload: { name, pin } });
   }, [sendRaw]);
 
   const joinRoom = useCallback((code: string, pin?: string) => {
+    currentRoomPinRef.current = pin;
     sendRaw({ type: 'join_room', payload: { code, pin } });
   }, [sendRaw]);
 
   const leaveRoom = useCallback(() => {
+    currentRoomPinRef.current = undefined;
     sendRaw({ type: 'leave_room', payload: {} });
   }, [sendRaw]);
 

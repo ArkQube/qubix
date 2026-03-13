@@ -400,6 +400,9 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
       const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'room:*', 'COUNT', 50);
       cursor = nextCursor;
       for (const key of keys) {
+        // Skip sub-keys like room:123:messages or room:123:participants
+        if (key.split(':').length > 2) continue;
+
         const roomData = await redis.get(key);
         if (!roomData) continue;
         const parsedRoom = JSON.parse(roomData);
