@@ -99,37 +99,54 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     }
   }, [handleSend]);
 
+  // Track when the picker was opened so we can distinguish spurious Android
+  // focus events (fired immediately after input.click()) from real returns.
+  const pickerOpenedAtRef = useRef<number>(0);
+  const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const openFilePicker = useCallback(() => {
     // Suspend WS network pings while the Native OS File Modal forcefully blocks JS execution
     pickerOpenRef.current = true;
+    pickerOpenedAtRef.current = Date.now();
     pausePing();
     fileInputRef.current?.click();
   }, [pausePing]);
 
   // ─── ANDROID FIX: Window focus recovery ──────────────────────────────────
-  // The `focus` event fires when the native file picker closes.
-  // CRITICAL RACE CONDITION: On Android/Chrome, `focus` fires BEFORE the
-  // file input's `change` event. If we violently `forceReconnect()` here instantly,
-  // `connected` becomes false, React disables our input, and the `change`
-  // event is permanently lost, dropping the user's file!
+  // PROBLEM 1 — Spurious focus: On some Android devices, calling
+  //   `input.click()` causes the browser to briefly blur/refocus the window
+  //   BEFORE the native picker appears. If we reconnect here, we kill the
+  //   connection while the user hasn't even seen the picker yet.
   //
-  // Fix: We wait 500ms. If `change` fires first, it handles the file BEFORE
-  // triggering reconnect. If the user cancelled the picker, the timeout catches it.
-  const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  // PROBLEM 2 — focus-before-change race: When the user picks a file and
+  //   the picker closes, `focus` fires BEFORE the input's `change` event.
+  //   If we `forceReconnect()` immediately, React disables the input and the
+  //   `change` event never fires, dropping the file.
+  //
+  // FIX: Ignore focus events that arrive < 2 seconds after opening the
+  // picker (these are spurious). For real returns, wait 300ms to let
+  // `change` fire first. If `change` handles it, it cancels this timeout.
   useEffect(() => {
     const handleWindowFocus = () => {
       if (!pickerOpenRef.current) return;
+
+      // Guard: If the picker was opened < 2s ago, this is a spurious
+      // Android focus event — the native picker hasn't even appeared yet.
+      const elapsed = Date.now() - pickerOpenedAtRef.current;
+      if (elapsed < 2000) {
+        console.log(`[ChatInput] Ignoring spurious focus event (${elapsed}ms after open)`);
+        return;
+      }
 
       if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
       focusTimeoutRef.current = setTimeout(() => {
         if (!pickerOpenRef.current) return; // Handled by onChange already
         
-        console.log('[ChatInput] Picker cancelled/closed without file. Reconnecting...');
+        console.log('[ChatInput] Picker closed/cancelled. Reconnecting...');
         pickerOpenRef.current = false;
         resumePing();
         forceReconnect();
-      }, 500);
+      }, 300);
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
@@ -141,7 +158,12 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     // We captured the file! Now we can safely trigger the reconnect.
     pickerOpenRef.current = false;
     resumePing();
-    forceReconnect();
+    // Only force reconnect if the picker was open long enough to have
+    // potentially killed the socket (> 5 seconds of OS suspension).
+    const elapsed = Date.now() - pickerOpenedAtRef.current;
+    if (elapsed > 5000) {
+      forceReconnect();
+    }
     
     const file = e.target.files?.[0];
     if (!file) return;
