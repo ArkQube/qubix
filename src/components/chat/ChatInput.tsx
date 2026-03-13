@@ -157,16 +157,13 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
     
-    // We captured the file! Now we can safely trigger the reconnect.
+    // We captured the file! 
+    // Do NOT force reconnect here. If Android actually killed the socket,
+    // the natural `ws.onclose` event will trigger our silent recovery.
+    // If we force it here, we might kill a perfectly healthy connection.
     pickerOpenRef.current = false;
     suppressDisconnectUI.current = false;
     resumePing();
-    // Only force reconnect if the picker was open long enough to have
-    // potentially killed the socket (> 5 seconds of OS suspension).
-    const elapsed = Date.now() - pickerOpenedAtRef.current;
-    if (elapsed > 5000) {
-      forceReconnect();
-    }
     
     const file = e.target.files?.[0];
     if (!file) return;
