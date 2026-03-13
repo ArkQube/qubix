@@ -730,27 +730,48 @@ wss.on('connection', (ws: any) => {
 
     if (id) {
       const user = users.get(id);
-      if (user) {
-        if (user.currentRoom) leaveRoom(id, user.currentRoom);
-        broadcastToAll({
-          type: WS_MESSAGE_TYPES.USER_LEFT,
-          payload: {
-            user: { id, username: user.username },
-            message: {
-              id: generateId(),
-              content: `${user.username} left the chat`,
-              type: 'system',
-              timestamp: Date.now(),
-              roomId: 'global',
-            },
-          },
-        }, id);
-        users.delete(id);
-        globalUsers.delete(id);
-        messageRate.delete(id);
-        console.log(`User disconnected: ${user.username}`);
-      }
       clients.delete(id);
+
+      if (user) {
+        // ─── GRACE PERIOD: Keep user in memory for session recovery ─────────
+        // On Android, opening the file picker kills the TCP socket. The client
+        // will reconnect in ~3 seconds and attempt session recovery via
+        // sessionId. If we delete the user NOW, the AUTH handler can't find
+        // them and they lose their identity, messages, and room membership.
+        //
+        // Instead: remove from active tracking, but keep the user object alive
+        // for 2 minutes. If they reconnect within that window, the AUTH
+        // handler reuses their identity seamlessly. If they don't, this
+        // timer cleans them up.
+        globalUsers.delete(id);
+
+        const gracePeriod = setTimeout(() => {
+          // If the user reconnected, clients.has(id) will be true again
+          if (clients.has(id)) return; // They came back — do nothing
+
+          // They didn't come back — full cleanup
+          if (user.currentRoom) leaveRoom(id, user.currentRoom);
+          broadcastToAll({
+            type: WS_MESSAGE_TYPES.USER_LEFT,
+            payload: {
+              user: { id, username: user.username },
+              message: {
+                id: generateId(),
+                content: `${user.username} left the chat`,
+                type: 'system',
+                timestamp: Date.now(),
+                roomId: 'global',
+              },
+            },
+          }, id);
+          users.delete(id);
+          messageRate.delete(id);
+          console.log(`User cleaned up after grace period: ${user.username}`);
+        }, 120_000); // 2 minutes grace
+
+        // If they reconnect via AUTH, the old timer is harmless (clients.has check)
+        console.log(`Socket closed for ${user.username} — 2min grace period started`);
+      }
     }
   });
 
