@@ -40,7 +40,7 @@ export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
           </div>
 
           <div className="flex flex-col justify-center gap-0.5">
-            <h1 className="font-bold text-[26px] tracking-tight leading-none text-foreground">Arkion</h1>
+            <h1 className="font-bold text-[26px] tracking-tight leading-none text-foreground">AQchat</h1>
             <span className="text-[11px] text-primary font-bold uppercase tracking-[0.2em] leading-none">by arkqube</span>
           </div>
         </div>

@@ -114,7 +114,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-lg">
                 <Box className="w-5 h-5 text-primary-foreground fill-primary-foreground/20" />
               </div>
-              <span className="font-bold text-xl">Arkion</span>
+              <span className="font-bold text-xl">AQchat</span>
             </div>
             <nav className="hidden md:flex items-center gap-6">
               <a href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</a>
@@ -200,7 +200,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
         <section id="features" className="py-24 bg-muted/30">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center mb-16">
-              <h2 className="text-3xl md:text-4xl font-bold mb-4">Why Choose Arkion?</h2>
+              <h2 className="text-3xl md:text-4xl font-bold mb-4">Why Choose AQchat?</h2>
               <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
                 Built for privacy-conscious users who need secure, temporary communication.
               </p>
@@ -242,7 +242,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
 
             <div className="grid md:grid-cols-4 gap-8">
               {[
-                { step: '01', title: 'Connect', desc: 'Open Arkion and get an anonymous username automatically' },
+                { step: '01', title: 'Connect', desc: 'Open AQchat and get an anonymous username automatically' },
                 { step: '02', title: 'Chat', desc: 'Join global chat or create a private room with a code' },
                 { step: '03', title: 'Share', desc: 'Send messages and files up to 10MB instantly' },
                 { step: '04', title: 'Disappear', desc: 'Everything automatically expires after the time limit' },
@@ -274,7 +274,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
               <div>
                 <h2 className="text-3xl md:text-4xl font-bold mb-6">Your Privacy Matters</h2>
                 <p className="text-lg text-muted-foreground mb-8">
-                  Arkion is built with privacy at its core. We don&apos;t track you, we don&apos;t store your data,
+                  AQchat is built with privacy at its core. We don&apos;t track you, we don&apos;t store your data,
                   and we can&apos;t read your messages.
                 </p>
                 <ul className="space-y-4">
@@ -333,7 +333,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
           <div className="max-w-4xl mx-auto px-4 text-center">
             <h2 className="text-3xl md:text-4xl font-bold mb-6">Ready to Chat Privately?</h2>
             <p className="text-lg text-muted-foreground mb-8">
-              Join thousands of users who trust Arkion for their ephemeral communication needs.
+              Join thousands of users who trust AQchat for their ephemeral communication needs.
             </p>
             <Button size="lg" onClick={onEnterChat} className="gap-2 text-lg px-8">
               <Zap className="w-5 h-5" />
@@ -350,7 +350,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
                 <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
                   <Zap className="w-4 h-4 text-primary-foreground" />
                 </div>
-                <span className="font-semibold">Arkion</span>
+                <span className="font-semibold">AQchat</span>
               </div>
               <p className="text-sm text-muted-foreground">
                 Ephemeral Real-Time Communication Platform — Version 2.0

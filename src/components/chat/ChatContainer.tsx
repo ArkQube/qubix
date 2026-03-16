@@ -52,7 +52,7 @@ export function ChatContainer() {
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4 text-primary" />
-          <p className="text-lg font-medium">Connecting to Arkion...</p>
+          <p className="text-lg font-medium">Connecting to AQchat...</p>
           <p className="text-sm text-muted-foreground">Establishing secure connection</p>
         </div>
       </div>

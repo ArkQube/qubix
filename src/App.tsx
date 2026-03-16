@@ -46,7 +46,7 @@ function AppContent() {
 
                   {/* Typography Branding */}
                   <div className="flex flex-col items-start leading-none gap-0">
-                    <h1 className="font-bold text-[18px] text-foreground tracking-tight">Arkion</h1>
+                    <h1 className="font-bold text-[18px] text-foreground tracking-tight">AQchat</h1>
                   </div>
                 </div>
               </Button>

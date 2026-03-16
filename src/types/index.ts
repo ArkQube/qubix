@@ -1,4 +1,4 @@
-// Arkion - Ephemeral Real-Time Communication Platform
+// AQchat - Ephemeral Real-Time Communication Platform
 // Type Definitions
 
 export interface User {
