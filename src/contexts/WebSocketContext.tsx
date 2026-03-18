@@ -245,23 +245,34 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     const currentState = ws.current?.readyState;
     if (currentState === WebSocket.OPEN || currentState === WebSocket.CONNECTING) return;
 
-    setConnecting(true);
+    const isSuppressed = suppressDisconnectUI.current;
+
+    // Only show "Connecting..." spinner for non-suppressed connections
+    if (!isSuppressed) {
+      setConnecting(true);
+    }
     setError(null);
 
     const wsUrl = DEFAULT_CONFIG.wsUrl;
-    console.log('Connecting to WebSocket:', wsUrl);
+    console.log('Connecting to WebSocket:', wsUrl, isSuppressed ? '(suppressed)' : '');
 
     try {
       ws.current = new WebSocket(wsUrl);
 
       ws.current.onopen = () => {
-        console.log('WebSocket connected');
+        console.log('WebSocket connected', isSuppressed ? '(suppressed reconnect)' : '');
         setConnected(true);
         setConnecting(false);
         setError(null);
-        setMessages([]);
-        setRoomParticipants([]);
-        setTypingUsers([]);
+
+        // Only wipe messages/participants on FRESH connections.
+        // Suppressed reconnects (file picker) preserve the chat history —
+        // the server re-auths and re-joins the room via session recovery.
+        if (!isSuppressed) {
+          setMessages([]);
+          setRoomParticipants([]);
+          setTypingUsers([]);
+        }
 
         sendRaw({
           type: 'auth',
