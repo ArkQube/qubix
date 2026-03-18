@@ -580,6 +580,19 @@ messageHandlers.set(WS_MESSAGE_TYPES.PING, async (ws) => {
   sendToClient(ws, { type: WS_MESSAGE_TYPES.PONG, payload: {} });
 });
 
+// Suspend handler — client signals it's opening the file picker (Android freezes JS)
+messageHandlers.set(WS_MESSAGE_TYPES.SUSPEND, async (ws: any) => {
+  ws.suspended = true;
+  console.log('[WS] Client suspended (file picker open)');
+});
+
+// Resume handler — client signals the file picker closed
+messageHandlers.set(WS_MESSAGE_TYPES.RESUME, async (ws: any) => {
+  ws.suspended = false;
+  ws.isAlive = true;
+  console.log('[WS] Client resumed (file picker closed)');
+});
+
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
 
 function sendToClient(ws: WebSocket, message: any) {
@@ -686,6 +699,7 @@ wss.on('connection', (ws: any) => {
 
   // Mark alive on connect — the heartbeat interval will check this
   ws.isAlive = true;
+  ws.suspended = false;
 
   ws.on('pong', () => {
     ws.isAlive = true; // Browser responded to our native ping
@@ -793,10 +807,13 @@ wss.on('connection', (ws: any) => {
 // to clean up genuine zombie connections.
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((client: any) => {
+    // Skip suspended clients — they have the file picker open (Android freezes JS)
+    if (client.suspended) return;
+
     if (client.isAlive === false) {
       client.missedPings = (client.missedPings || 0) + 1;
       if (client.missedPings >= 3) {
-        // Dead for 60s+ — terminate
+        // Dead for 90s+ — terminate
         return client.terminate();
       }
     } else {
@@ -807,7 +824,7 @@ const heartbeatInterval = setInterval(() => {
     client.isAlive = false;
     client.ping();
   });
-}, 20_000); // 20s — keeps Render proxy alive (their idle timeout is ~30-60s)
+}, 30_000); // 30s interval × 3 missed = 90s tolerance (mobile-friendly)
 
 // ─── HTTP Routes ──────────────────────────────────────────────────────────────
 

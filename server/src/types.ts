@@ -85,6 +85,8 @@ export const WS_MESSAGE_TYPES = {
   DELETE_MESSAGE: 'delete_message',
   DELETE_FILE: 'delete_file',
   PING: 'ping',
+  SUSPEND: 'suspend',
+  RESUME: 'resume',
 
   // Server to Client
   AUTH_SUCCESS: 'auth_success',

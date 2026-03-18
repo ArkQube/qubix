@@ -25,6 +25,8 @@ interface WebSocketContextType {
   setUsername: (username: string) => void;
   pausePing: () => void;
   resumePing: () => void;
+  sendSuspend: () => void;
+  sendResume: () => void;
   isSocketAlive: () => boolean;
   forceReconnect: () => void;
   suppressDisconnectUI: React.MutableRefObject<boolean>;
@@ -480,6 +482,16 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     }
   }, [sendRaw]);
 
+  // Tell the server to skip heartbeat checks for this client (file picker open)
+  const sendSuspend = useCallback(() => {
+    sendRaw({ type: 'suspend', payload: {} });
+  }, [sendRaw]);
+
+  // Tell the server to resume heartbeat checks for this client (file picker closed)
+  const sendResume = useCallback(() => {
+    sendRaw({ type: 'resume', payload: {} });
+  }, [sendRaw]);
+
   // Check the raw WebSocket readyState — bypasses stale React state
   // Critical for Android: when the tab resumes from suspension, React's
   // `connected` state might still say `true` because setState hasn't flushed.
@@ -542,6 +554,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     setUsername,
     pausePing,
     resumePing,
+    sendSuspend,
+    sendResume,
     isSocketAlive,
     forceReconnect,
     suppressDisconnectUI,

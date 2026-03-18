@@ -28,7 +28,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeUploads = useRef(new Set<string>());
   const pickerOpenRef = useRef(false);
-  const { pausePing, resumePing, forceReconnect, suppressDisconnectUI } = useWebSocket();
+  const { pausePing, resumePing, sendSuspend, sendResume, forceReconnect, suppressDisconnectUI } = useWebSocket();
 
   const handleSend = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
@@ -110,8 +110,9 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     pickerOpenedAtRef.current = Date.now();
     suppressDisconnectUI.current = true; // Don't show "Connection Lost" while picker is open
     pausePing();
+    sendSuspend(); // Tell server to skip heartbeat checks for us
     fileInputRef.current?.click();
-  }, [pausePing, suppressDisconnectUI]);
+  }, [pausePing, sendSuspend, suppressDisconnectUI]);
 
   // ─── ANDROID FIX: Window focus recovery ──────────────────────────────────
   // PROBLEM 1 — Spurious focus: On some Android devices, calling
@@ -147,6 +148,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
         pickerOpenRef.current = false;
         suppressDisconnectUI.current = false;
         resumePing();
+        sendResume(); // Tell server to resume heartbeat checks
         forceReconnect();
       }, 300);
     };
@@ -164,6 +166,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     pickerOpenRef.current = false;
     suppressDisconnectUI.current = false;
     resumePing();
+    sendResume(); // Tell server to resume heartbeat checks
     
     const file = e.target.files?.[0];
     if (!file) return;
