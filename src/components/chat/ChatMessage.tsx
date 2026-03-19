@@ -27,6 +27,7 @@ interface ChatMessageProps {
 export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps) {
   const [isCopied, setIsCopied] = useState(false);
   const [isActive, setIsActive] = useState(false); // Touch-screen overlay toggle state
+  const [isExpanded, setIsExpanded] = useState(false); // See more / See less toggle
   const messageRef = useRef<HTMLDivElement>(null);
 
   const isSystemMessage = message.type === 'system';
@@ -162,17 +163,33 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
             } ${isActive ? 'ring-2 ring-primary/50' : ''}`}
         >
           {/* Text Content */}
-          {message.content && (
-            <div className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>
-              <Linkify options={{ 
-                target: '_blank', 
-                rel: 'noopener noreferrer',
-                className: 'underline font-medium hover:opacity-80 transition-opacity'
-              }}>
-                {he.decode(message.content)}
-              </Linkify>
-            </div>
-          )}
+          {message.content && (() => {
+            const decoded = he.decode(message.content);
+            const isLong = decoded.length > 100;
+            const displayText = isLong && !isExpanded ? decoded.slice(0, 100) + '…' : decoded;
+
+            return (
+              <div className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>
+                <Linkify options={{
+                  target: '_blank',
+                  rel: 'noopener noreferrer',
+                  className: 'underline font-medium hover:opacity-80 transition-opacity'
+                }}>
+                  {displayText}
+                </Linkify>
+                {isLong && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+                    className={`ml-1 text-xs font-medium opacity-70 hover:opacity-100 transition-opacity ${
+                      isOwnMessage ? 'text-primary-foreground' : 'text-primary'
+                    }`}
+                  >
+                    {isExpanded ? 'See less' : 'See more'}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
 
         {/* File Attachment */}
           {message.fileData && (
