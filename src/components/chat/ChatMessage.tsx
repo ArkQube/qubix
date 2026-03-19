@@ -205,7 +205,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
                   <div className="absolute bottom-0 left-0 right-0 p-2 flex items-center justify-between bg-black/60 backdrop-blur-md text-white opacity-100 transition-opacity">
                     <div className="flex items-center gap-2 text-xs min-w-0">
                       <div className="shrink-0">{renderFileIcon(message.fileData.fileType)}</div>
-                      <span className="break-all max-w-[150px] font-medium">{message.fileData.fileName}</span>
+                      <span className="truncate max-w-[80px] sm:max-w-[120px] font-medium" title={message.fileData.fileName}>{message.fileData.fileName}</span>
                       <span className="text-white/70 shrink-0">({formatFileSize(message.fileData.fileSize)})</span>
                     </div>
                     <Button

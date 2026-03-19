@@ -249,7 +249,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.SEND_MESSAGE, async (ws, userId, payload) =
   const { content, roomId, type = 'text', fileData } = payload;
   const sanitizedContent = sanitizeMessage(content || '');
 
-  if (sanitizedContent.length > 5000) {
+  if (sanitizedContent.length > 50000) {
     sendError(ws, 'Message too long');
     return;
   }
