@@ -443,25 +443,80 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       setMessages(prev => [...prev, ghostMessage]);
     }
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('sessionId', sessionId.current);
-    if (currentRoomRef.current) {
-      formData.append('roomId', currentRoomRef.current.id);
-    }
-
     try {
-      const response = await fetch(`${DEFAULT_CONFIG.apiUrl}/api/upload`, {
+      // ── Step 1: Get signed Cloudinary credentials from server ──────────────
+      const signRes = await fetch(`${DEFAULT_CONFIG.apiUrl}/api/upload/sign`, {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sessionId.current }),
       });
 
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Upload failed');
+      if (!signRes.ok) {
+        const err = await signRes.json();
+        throw new Error(err.error || 'Failed to get upload signature');
       }
 
-      const data = await response.json();
+      const { signature, timestamp, folder, apiKey, cloudName } = await signRes.json();
+
+      // ── Step 2: Upload directly to Cloudinary (file travels once) ─────────
+      const cloudinaryFormData = new FormData();
+      cloudinaryFormData.append('file', file);
+      cloudinaryFormData.append('api_key', apiKey);
+      cloudinaryFormData.append('timestamp', String(timestamp));
+      cloudinaryFormData.append('signature', signature);
+      cloudinaryFormData.append('folder', folder);
+
+      // Use XHR for real-time upload progress
+      const cloudinaryResult = await new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`);
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 90); // Reserve 10% for confirm
+            setUploadProgress({ fileId, progress: pct, status: 'uploading' });
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(JSON.parse(xhr.responseText));
+          } else {
+            try {
+              const errData = JSON.parse(xhr.responseText);
+              reject(new Error(errData.error?.message || 'Cloudinary upload failed'));
+            } catch {
+              reject(new Error('Cloudinary upload failed'));
+            }
+          }
+        };
+
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.send(cloudinaryFormData);
+      });
+
+      // ── Step 3: Confirm metadata with server (for deletion/cleanup) ───────
+      const confirmRes = await fetch(`${DEFAULT_CONFIG.apiUrl}/api/upload/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: sessionId.current,
+          roomId: currentRoomRef.current?.id,
+          fileId,
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type,
+          url: cloudinaryResult.secure_url,
+          cloudinaryPublicId: cloudinaryResult.public_id,
+        }),
+      });
+
+      if (!confirmRes.ok) {
+        const err = await confirmRes.json();
+        throw new Error(err.error || 'Failed to confirm upload');
+      }
+
+      const data = await confirmRes.json();
       setUploadProgress({ fileId, progress: 100, status: 'completed' });
       setTimeout(() => setUploadProgress(null), 2000);
       return data.file;

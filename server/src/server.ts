@@ -1014,6 +1014,127 @@ app.post('/api/upload', upload.single('file'), async (req: express.Request, res:
   }
 });
 
+// ─── Direct Cloudinary Upload: Signature endpoint ─────────────────────────────
+// Client calls this to get signed Cloudinary params, then uploads directly
+// to Cloudinary — eliminates the double-hop through our server.
+app.post('/api/upload/sign', async (req: express.Request, res: express.Response) => {
+  try {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+    // ── IP Abuse Protection (same as /api/upload) ──
+    const isBlocked = await redis.get(`block:ip:${ip}`);
+    if (isBlocked) {
+      return res.status(429).json({ error: 'Too Many Requests: IP Temporarily Blocked' });
+    }
+
+    const uploadCount = await redis.incr(`upload:ip:${ip}`);
+    if (uploadCount === 1) await redis.expire(`upload:ip:${ip}`, 60);
+    if (uploadCount > 10) {
+      await redis.setex(`block:ip:${ip}`, 600, '1');
+      return res.status(429).json({ error: 'Rate limit exceeded: IP Blocked for 10 minutes' });
+    }
+
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(401).json({ error: 'Not authenticated' });
+
+    let user: ServerUser | undefined;
+    for (const u of users.values()) {
+      if (u.sessionId === sessionId) { user = u; break; }
+    }
+    if (!user) return res.status(401).json({ error: 'User not found' });
+
+    // Generate Cloudinary signature
+    const timestamp = Math.floor(Date.now() / 1000);
+    const folder = 'arkion-uploads';
+    const paramsToSign = {
+      timestamp,
+      folder,
+    };
+
+    const signature = cloudinary.utils.api_sign_request(
+      paramsToSign,
+      process.env.CLOUDINARY_API_SECRET || ''
+    );
+
+    res.json({
+      signature,
+      timestamp,
+      folder,
+      apiKey: process.env.CLOUDINARY_API_KEY || '',
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+    });
+
+    console.log(`[UPLOAD/SIGN] Signature generated for ${user.username}`);
+  } catch (err) {
+    console.error('Upload sign error:', err);
+    res.status(500).json({ error: 'Failed to generate upload signature' });
+  }
+});
+
+// ─── Direct Cloudinary Upload: Confirm endpoint ───────────────────────────────
+// After the client uploads directly to Cloudinary, it calls this to register
+// the file metadata in Redis for deletion tracking, CRON cleanup, etc.
+app.post('/api/upload/confirm', async (req: express.Request, res: express.Response) => {
+  try {
+    const { sessionId, roomId, fileId, fileName, fileSize, fileType, url, cloudinaryPublicId } = req.body;
+
+    if (!sessionId) return res.status(401).json({ error: 'Not authenticated' });
+    if (!fileId || !url || !cloudinaryPublicId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    let user: ServerUser | undefined;
+    for (const u of users.values()) {
+      if (u.sessionId === sessionId) { user = u; break; }
+    }
+    if (!user) return res.status(401).json({ error: 'User not found' });
+
+    const timestamp = Date.now();
+    const expiresAt = timestamp + EXPIRATION_TIMES.file * 1000;
+
+    const fileData: ServerFileData = {
+      fileId,
+      fileName: fileName || 'unknown',
+      fileSize: fileSize || 0,
+      fileType: fileType || 'application/octet-stream',
+      url,
+      cloudinaryPublicId,
+      ownerId: user.id,
+      uploadedAt: timestamp,
+      expiresAt,
+    };
+
+    await redis.setex(
+      REDIS_KEYS.file(fileId),
+      EXPIRATION_TIMES.file,
+      JSON.stringify(fileData)
+    );
+
+    // Storage tracking for CRON garbage collector
+    const listKey = roomId ? 'files:private' : 'files:global';
+    await redis.zadd(listKey, timestamp, fileId);
+
+    res.json({
+      success: true,
+      file: {
+        fileId,
+        fileName: fileData.fileName,
+        fileSize: fileData.fileSize,
+        fileType: fileData.fileType,
+        url: fileData.url,
+        cloudinaryPublicId: fileData.cloudinaryPublicId,
+        ownerId: user.id,
+        expiresAt,
+      },
+    });
+
+    console.log(`[UPLOAD/CONFIRM] File ${fileName} registered by ${user.username}`);
+  } catch (err) {
+    console.error('Upload confirm error:', err);
+    res.status(500).json({ error: 'Failed to confirm upload' });
+  }
+});
+
 // API info
 app.get('/api/info', (_, res) => {
   res.json({
