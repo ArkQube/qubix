@@ -1,7 +1,8 @@
 import { useTheme } from "@/components/theme-provider";
 import { useWebSocket } from "@/contexts/WebSocketContext";
+import { useImageCompression } from "@/hooks/useImageCompression";
 import { useState, useEffect } from "react";
-import { Moon, Sun, User as UserIcon, Save } from "lucide-react";
+import { Moon, Sun, User as UserIcon, Save, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +12,7 @@ export function SettingsView() {
     const { currentUser, setUsername } = useWebSocket();
     const [nameInput, setNameInput] = useState(currentUser?.username || "");
     const [isSaved, setIsSaved] = useState(false);
+    const { compressImages, setCompressImages } = useImageCompression();
 
     useEffect(() => {
         if (currentUser?.username) {
@@ -63,6 +65,43 @@ export function SettingsView() {
                                 This identity is completely anonymous and will reset if you clear your cache.
                             </p>
                         </div>
+                    </div>
+                </div>
+
+                {/* File Upload Settings */}
+                <div className="space-y-4">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <ImageIcon className="w-5 h-5" />
+                        File Uploads
+                    </h3>
+                    <div className="p-6 border rounded-lg bg-card space-y-4">
+                        <div className="flex items-center justify-between">
+                            <div className="space-y-1">
+                                <Label>Image Quality</Label>
+                                <p className="text-sm text-muted-foreground">Choose whether to compress images before sending.</p>
+                            </div>
+                            <div className="flex gap-2 bg-muted p-1 rounded-md shrink-0">
+                                <Button
+                                    variant={compressImages ? "ghost" : "default"}
+                                    size="sm"
+                                    onClick={() => setCompressImages(false)}
+                                    className="px-3"
+                                >
+                                    Original
+                                </Button>
+                                <Button
+                                    variant={compressImages ? "default" : "ghost"}
+                                    size="sm"
+                                    onClick={() => setCompressImages(true)}
+                                    className="px-3"
+                                >
+                                    Compressed
+                                </Button>
+                            </div>
+                        </div>
+                        <p className="text-sm text-muted-foreground mt-2">
+                            Compression is only applied to images on the device before they are uploaded. Other file types are sent as-is.
+                        </p>
                     </div>
                 </div>
 

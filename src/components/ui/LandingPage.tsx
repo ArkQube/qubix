@@ -11,8 +11,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Sparkles,
-  Eye,
-  Box
+  Eye
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -111,8 +110,8 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
         <header className="border-b bg-background/80 backdrop-blur-md sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-lg">
-                <Box className="w-5 h-5 text-primary-foreground fill-primary-foreground/20" />
+              <div className="w-10 h-10 flex items-center justify-center">
+                <img src="/Qube.svg" alt="Logo" className="w-full h-full object-contain" />
               </div>
               <span className="font-bold text-xl">AQchat</span>
             </div>
@@ -347,8 +346,8 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex flex-col md:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-                  <Zap className="w-4 h-4 text-primary-foreground" />
+                <div className="w-8 h-8 flex items-center justify-center">
+                  <img src="/Qube.svg" alt="Logo" className="w-full h-full object-contain" />
                 </div>
                 <span className="font-semibold">AQchat</span>
               </div>

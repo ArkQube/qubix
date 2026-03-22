@@ -7,7 +7,7 @@ Qubix is a privacy-first, ephemeral real-time communication platform enabling te
 *   **Ephemeral Messaging:** Messages and files automatically expire and vanish after a set period (1 hour for Global, 12 hours for Private Rooms).
 *   **Anonymous Identity:** No sign-ups required. Users are assigned an anonymous, editable identity tied to their current browser session.
 *   **Real-time Communication:** Powered by WebSockets for lightning-fast, bi-directional message broadcasting.
-*   **File Sharing:** Securely upload and share images, documents, and videos. Files are stored temporarily on Cloudinary with automatic image compression.
+*   **File Sharing:** Securely upload and share images, documents, and videos with a resilient, direct-to-Cloudinary upload pipeline featuring instant local previews, upload progress tracking, and robust WebSocket recovery mechanics. Files are stored temporarily on Cloudinary with automatic image compression.
 *   **Private Rooms:** Create isolated rooms with a unique 5-character code and an optional 4-digit PIN for extra security.
 *   **Session Recovery:** Persistent `sessionId` allows seamless identity restoration across page reloads and mobile suspensions. A 2-minute server-side grace period preserves user identity during brief disconnects.
 *   **Mobile-First Design:** Resilient WebSocket recovery handles Android/iOS file picker suspensions. Native RFC6455 server pings keep connections alive through load balancer idle timeouts.
@@ -20,7 +20,7 @@ Qubix is a privacy-first, ephemeral real-time communication platform enabling te
 
 To prevent malicious actors from exhausting the free-tier Cloudinary limit and crashing the Redis server, Qubix utilizes an automated self-healing defense pipeline:
 
-1. **IP Abuse Throttling (The Firewall):** Express middleware actively monitors `POST /api/upload`. Uploads are strictly rate-limited (max 10 per minute per IP). Breaching this limit instantly triggers a 10-minute automated IP ban inside Redis, rejecting future requests with a `429 Too Many Requests`.
+1. **IP Abuse Throttling (The Firewall):** Express middleware actively monitors upload endpoints (e.g., `/api/upload/sign` and `/api/upload/confirm`). Uploads are strictly rate-limited (max 10 per minute per IP). Breaching this limit instantly triggers a 10-minute automated IP ban inside Redis, rejecting future requests with a `429 Too Many Requests`.
 2. **Priority ZSET Indexing (The Map):** Every successful upload logs its `fileId` into one of two Redis Sorted Sets (`files:global` and `files:private`), using the upload timestamp as the score. This provides an instant chronological map of Cloudinary storage without expensive API queries.
 3. **20GB Auto-Garbage Collector (The Cleaner):** A Node Cron job (`*/10 * * * *`) audits the live Cloudinary storage quota. If usage trips the 80% (20GB) redline, it triggers an emergency progressive cull:
     * Deletes Global Chat files older than 30 minutes.
@@ -78,7 +78,7 @@ A high-performance Node.js server acts as the central hub for all real-time mess
 *   **Core:** Express.js (HTTP endpoints), `ws` library (WebSocket server)
 *   **Database (In-Memory Datastore):** Redis (via Upstash). Used exclusively to store temporary messages and room metadata. **Crucially, Redis handles the automatic TTL (Time-To-Live) expiration of data.**
 *   **File CDN:** Cloudinary. Used to temporarily host uploaded files.
-*   **Key Responsibilities:** Authenticating persistent user sessions (via `sessionId`), managing chat room subscriptions (Pub/Sub pattern over WebSockets), handling REST API endpoints for file uploads (`multer` memory storage -> Cloudinary API), proxying file downloads to prevent direct CDN exposure, and aggressively defending storage quotas via Node-Cron.
+*   **Key Responsibilities:** Authenticating persistent user sessions (via `sessionId`), managing chat room subscriptions (Pub/Sub pattern over WebSockets), handling REST API endpoints for direct client-to-Cloudinary file uploads (issuing signed credentials and confirming metadata to eliminate bottlenecks), proxying file downloads to prevent direct CDN exposure, and aggressively defending storage quotas via Node-Cron.
 
 ### Mobile WebSocket Resilience
 On Android/iOS, opening the native file picker suspends the browser's JavaScript execution and can kill TCP connections. Qubix handles this with a multi-layered recovery system:
@@ -189,7 +189,7 @@ The React/Vite app is a static site and can be hosted easily on platforms like [
 4. Leave the **Root Directory** empty (as `./` the root).
 5. Click **Deploy**.
 
-Vercel will provide a scalable, live web URL (e.g., `https://arkion.vercel.app`). Your ephemeral chat platform is now globally scalable and production-ready!
+Vercel will provide a scalable, live web URL (e.g., `https://aqchat.vercel.app`). Your ephemeral chat platform is now globally scalable and production-ready!
 
 ## 📄 License
 

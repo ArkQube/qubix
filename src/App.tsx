@@ -9,7 +9,6 @@ import { Toaster } from '@/components/ui/sonner';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription, SheetClose } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Box } from 'lucide-react';
 import './App.css';
 
 function AppContent() {
@@ -40,8 +39,8 @@ function AppContent() {
             <SheetTrigger asChild>
               <Button variant="ghost" className="p-1 -ml-2 hover:bg-transparent flex items-center gap-2 active:scale-95 transition-transform h-auto">
                 <div className="flex items-center gap-2 bg-gradient-to-r from-primary/10 to-transparent p-1 pr-3 rounded-lg">
-                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-sm">
-                    <Box className="w-4 h-4 text-primary-foreground fill-primary-foreground/20" />
+                  <div className="w-7 h-7 flex items-center justify-center shadow-sm">
+                    <img src="/Qube.svg" alt="Logo" className="w-full h-full object-contain" />
                   </div>
 
                   {/* Typography Branding */}

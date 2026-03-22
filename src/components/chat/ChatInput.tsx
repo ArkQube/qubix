@@ -12,6 +12,7 @@ import { formatFileSize, validateFileSize } from '@/lib/utils';
 import { DEFAULT_CONFIG } from '@/types';
 import imageCompression from 'browser-image-compression';
 import { useWebSocket } from '@/contexts/WebSocketContext';
+import { useImageCompression } from '@/hooks/useImageCompression';
 
 interface ChatInputProps {
   onSendMessage: (content: string, fileData?: any, ghostId?: string) => void;
@@ -29,6 +30,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const activeUploads = useRef(new Set<string>());
   const pickerOpenRef = useRef(false);
   const { pausePing, resumePing, sendSuspend, sendResume, forceReconnect, suppressDisconnectUI } = useWebSocket();
+  const { compressImages } = useImageCompression();
 
   const handleSend = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
@@ -59,7 +61,7 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
       try {
         let fileToUpload = currentFile;
         // Smart Image Compression
-        if (currentFile.type.startsWith('image/')) {
+        if (compressImages && currentFile.type.startsWith('image/')) {
           try {
             const compressedBlob = await imageCompression(currentFile, {
               maxSizeMB: 1,
