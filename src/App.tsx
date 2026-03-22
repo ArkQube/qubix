@@ -88,14 +88,6 @@ function AppContent() {
             className="flex-1 flex flex-col min-h-0 overflow-hidden"
           >
             {activeTab === 'chat' && <ChatContainer />}
-            {activeTab === 'rooms' && (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <h2 className="text-2xl font-bold mb-2">Rooms</h2>
-                  <p className="text-muted-foreground">Use the chat to create or join rooms</p>
-                </div>
-              </div>
-            )}
             {activeTab === 'settings' && <SettingsView />}
             {activeTab === 'help' && (
               <div className="flex-1 flex items-center justify-center">

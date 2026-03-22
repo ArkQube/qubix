@@ -2,7 +2,6 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   MessageSquare,
-  Users,
   Settings,
   HelpCircle,
   Shield,
@@ -24,7 +23,6 @@ export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
 
   const menuItems = [
     { id: 'chat', label: 'Chat', icon: MessageSquare },
-    { id: 'rooms', label: 'Rooms', icon: Users },
     { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'help', label: 'Help', icon: HelpCircle },
   ];
