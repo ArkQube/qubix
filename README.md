@@ -1,196 +1,156 @@
-# Qubix
+# AQchat
 
-Qubix is a privacy-first, ephemeral real-time communication platform enabling temporary and anonymous messaging. Designed with a sleek, modern UI, it offers global chat rooms and secure private rooms without requiring user accounts or persisting permanent data.
+AQchat (formerly Qubix) is a privacy-first, ephemeral real-time communication platform enabling temporary and anonymous messaging. Designed with a sleek, modern, glassmorphic UI, it offers global chat rooms and secure private rooms without requiring user accounts or persisting permanent data.
 
 ## 🚀 Features
 
 *   **Ephemeral Messaging:** Messages and files automatically expire and vanish after a set period (1 hour for Global, 12 hours for Private Rooms).
 *   **Anonymous Identity:** No sign-ups required. Users are assigned an anonymous, editable identity tied to their current browser session.
 *   **Real-time Communication:** Powered by WebSockets for lightning-fast, bi-directional message broadcasting.
-*   **File Sharing:** Securely upload and share images, documents, and videos with a resilient, direct-to-Cloudinary upload pipeline featuring instant local previews, upload progress tracking, and robust WebSocket recovery mechanics. Files are stored temporarily on Cloudinary with automatic image compression.
+*   **Markdown & Code Snippets 💻:** Send rich-text messages and VS-Code-style syntax-highlighted code blocks perfectly wrapped in ` ``` ` backticks.
+*   **Quick Voice Notes 🎙️:** Instantly record and strictly stream audio snippets utilizing the browser `MediaRecorder` API directly into the chat feed.
+*   **Emoji Reactions 👍:** Hover over any message to react with emojis (🔥, 😂, ❤️) that sync in real-time across all connected clients.
+*   **File Sharing & Compression:** Securely upload and share images, documents, and videos with a resilient, direct-to-Cloudinary upload pipeline featuring instant local previews. Users can toggle **Image Compression** in their settings to save bandwidth.
 *   **Private Rooms:** Create isolated rooms with a unique 5-character code and an optional 4-digit PIN for extra security.
 *   **Session Recovery:** Persistent `sessionId` allows seamless identity restoration across page reloads and mobile suspensions. A 2-minute server-side grace period preserves user identity during brief disconnects.
-*   **Mobile-First Design:** Resilient WebSocket recovery handles Android/iOS file picker suspensions. Native RFC6455 server pings keep connections alive through load balancer idle timeouts.
-*   **WhatsApp-Style Rendering:** Chat DOM uses `scrollIntoView` reverse-rendering, message arrays are memory-capped (last 50) for lag-free instant loads.
-*   **Touch-Native UI:** React `isActive` touch-toggle overlays for message actions (Copy/Delete) replace broken desktop CSS `:hover` states on mobile.
-*   **Advanced IP & Storage Defenses:** Built-in safeguards against abuse, spam, and Cloudinary quota exhaustion.
-*   **Dark/Light Theme:** Toggle between themes with `next-themes`, persisting user preference across sessions.
+*   **Mobile-First Design:** Resilient WebSocket recovery handles Android/iOS file picker suspensions safely. Native RFC6455 server pings keep connections alive through cloud-provider load balancers.
+*   **Advanced IP & Storage Defenses:** Built-in backend safeguards monitor Cloudinary usage with Node-Cron and progressively cull expired files to fiercely protect free-tier quotas.
+*   **Dark/Light Theme:** Toggle between themes, seamlessly persisting user preference via `next-themes`.
 
-## 🛡️ 3-Layer Storage & Abuse Defense System
+## 📂 Detailed Project Structure
 
-To prevent malicious actors from exhausting the free-tier Cloudinary limit and crashing the Redis server, Qubix utilizes an automated self-healing defense pipeline:
-
-1. **IP Abuse Throttling (The Firewall):** Express middleware actively monitors upload endpoints (e.g., `/api/upload/sign` and `/api/upload/confirm`). Uploads are strictly rate-limited (max 10 per minute per IP). Breaching this limit instantly triggers a 10-minute automated IP ban inside Redis, rejecting future requests with a `429 Too Many Requests`.
-2. **Priority ZSET Indexing (The Map):** Every successful upload logs its `fileId` into one of two Redis Sorted Sets (`files:global` and `files:private`), using the upload timestamp as the score. This provides an instant chronological map of Cloudinary storage without expensive API queries.
-3. **20GB Auto-Garbage Collector (The Cleaner):** A Node Cron job (`*/10 * * * *`) audits the live Cloudinary storage quota. If usage trips the 80% (20GB) redline, it triggers an emergency progressive cull:
-    * Deletes Global Chat files older than 30 minutes.
-    * If still > 20GB, deletes Global files older than 15 minutes.
-    * If still > 20GB, deletes Private Room files older than 60 minutes.
-    * Broadcasts a `file_deleted` WS event to visually wipe the destroyed files from connected clients' screens seamlessly.
-
-## 📂 Project Structure
-
-Qubix follows a decoupled Mono-repo structure where the React Client and Node.js WebSocket Engine co-exist.
+AQchat operates on a decoupled Mono-repo architecture, completely separating the React Frontend client from the Node.js WebSocket engine.
 
 ```text
-Qubix/
-├── README.md                 # Project Documentation
-├── package.json              # Frontend dependencies
-├── vite.config.ts            # Vite bundler configuration
-├── tailwind.config.ts        # UI System styling constraints
+AQchat/
+├── README.md                 # Core project documentation and architecture overview
+├── package.json              # Frontend workspace scripts and dependencies
+├── vite.config.ts            # Vite bundler, PWA, and build optimization configs
+├── tailwind.config.ts        # UI System styling components, constraints, and animations
+├── postcss.config.js         # CSS transformation and autoprefixing
 ├── src/                      # 🎨 FRONTEND (React + Vite)
-│   ├── App.tsx               # Main React entry point
-│   ├── main.tsx              # React DOM mounting
-│   ├── components/           # UI Components
-│   │   ├── chat/             # Chat UI (ChatContainer, ChatMessage, ChatInput)
-│   │   ├── rooms/            # Room Management UI (Create/Join rooms)
-│   │   ├── settings/         # User Settings (Username, Theme)
-│   │   └── ui/               # shadcn/ui primitives (Buttons, Inputs, Dialogs)
-│   ├── contexts/
-│   │   └── WebSocketContext.tsx # Central brain mapping WS events to React State
-│   ├── hooks/                # Custom React Hooks
-│   ├── lib/                  # Utilities (Tailwind merge, time formatters)
-│   └── types/                # Shared TypeScript definitions
+│   ├── App.tsx               # Main React Router & global view orchestrator
+│   ├── main.tsx              # React DOM mounting & Theme/WS Provider injections
+│   ├── index.css             # Global stylesheet (Tailwind imports & custom root variables)
+│   ├── components/           # UI Component Library
+│   │   ├── chat/             # Chat UI specific components
+│   │   │   ├── ChatContainer.tsx # Core Chat orchestrator (handles layout and event routing)
+│   │   │   ├── ChatInput.tsx     # Message input box, Markdown sender, and Voice Note MediaRecorder
+│   │   │   ├── ChatMessage.tsx   # Individual messages, reaction pills, Markdown Renderer
+│   │   │   └── MessageList.tsx   # Scrolling message feed, reverse-rendering logic
+│   │   ├── rooms/            # Room Management Modals
+│   │   │   ├── CreateRoom.tsx    # UI for creating secure Private Rooms with optional PINs
+│   │   │   └── JoinRoom.tsx      # Logic to connect & authenticate into Private Rooms
+│   │   ├── settings/         # App Utilities
+│   │   │   └── SettingsModal.tsx # Editable user info, Theme picking, and Image Compression controls
+│   │   └── ui/               # Reusable primitive elements (shadcn/ui inspired)
+│   │       ├── button.tsx, dialog.tsx, input.tsx, label.tsx, switch.tsx, ...
+│   ├── contexts/             # Global React State Providers
+│   │   └── WebSocketContext.tsx  # Central brain! Connects WS client to Node server, maps Reducers
+│   ├── hooks/                # Custom utility hooks
+│   │   ├── use-debounce.ts       # Performance hook for typing indicators
+│   │   ├── use-mobile.tsx        # Responsive layout hook handling media queries
+│   │   └── useImageCompression.ts# Canvas-based utility to aggressively compress JPEG/PNG/WebP 
+│   ├── lib/                  # Shared Business Logic
+│   │   └── utils.ts              # Tailwind `cn` merger, random ID generators, Markdown parser
+│   └── types/                # Typescript Definitions
+│       └── index.ts              # Global definitions (Message, User, Room, `DEFAULT_CONFIG`)
 │
-└── server/                   # ⚙️ BACKEND (Node.js + WebSockets)
-    ├── package.json          # Backend dependencies
-    ├── tsconfig.json         # Backend TS configuration
+└── server/                   # ⚙️ BACKEND (Node.js + WebSockets + Redis)
+    ├── package.json          # Backend runtime scripts (Express, socket, upstash, cron)
+    ├── tsconfig.json         # Strict TypeScript backend configuration
+    ├── .env                  # Secrets vault (Redis connection, Cloudinary Keys)
     └── src/
-        ├── server.ts         # Main core Engine (Express + WS + Redis + Cloudinary + Cron)
-        ├── types.ts          # Backend Type Definitions & TTL Constants
-        └── utils.ts          # Backend Utilities (ID generators, Mime types)
+        ├── server.ts         # Main core Engine. Orchestrates HTTP routes, Cloudinary signing, 
+        │                     # IP throttling, Cron Auto-Cleaner, and the WebSocket PubSub logic.
+        ├── types.ts          # Backend definitions (WS_MESSAGE_TYPES, System configs)
+        └── utils.ts          # Backend Utilities (UUID generation, File validation, Rate limits)
 ```
 
 ## 🏗️ Architecture
 
-The application follows a decoupled client-server architecture:
-
 ### Frontend (React + Vite + TypeScript)
-The client-side application handles all user interactions, UI rendering, and WebSocket connections.
-*   **Framework:** React 18, Vite (for fast HMR and optimized builds)
-*   **Styling:** Tailwind CSS, framer-motion (animations), next-themes (light/dark mode)
-*   **Components:** shadcn/ui (Radix UI primitives)
-*   **State Management:** React Context API (`WebSocketContext.tsx`) for global connection and message state.
-*   **Key Responsibilities:** Managing the WebSocket connection lifecycle, rendering the chat interface (messages, file previews, typing indicators), and handling the responsive layout logic.
+The client handles all interactions, UI rendering, layout animations, and WebSocket recovery.
+*   **Framework:** React 18, Vite
+*   **Styling:** Tailwind CSS, `framer-motion`
+*   **Message Rendering:** `react-markdown` and `react-syntax-highlighter`
+*   **State Management:** React Context API (`WebSocketContext.tsx`) for global messaging synchrony.
 
 ### Backend (Node.js + Express + WebSocket)
-A high-performance Node.js server acts as the central hub for all real-time messaging and file coordination.
-*   **Core:** Express.js (HTTP endpoints), `ws` library (WebSocket server)
-*   **Database (In-Memory Datastore):** Redis (via Upstash). Used exclusively to store temporary messages and room metadata. **Crucially, Redis handles the automatic TTL (Time-To-Live) expiration of data.**
-*   **File CDN:** Cloudinary. Used to temporarily host uploaded files.
-*   **Key Responsibilities:** Authenticating persistent user sessions (via `sessionId`), managing chat room subscriptions (Pub/Sub pattern over WebSockets), handling REST API endpoints for direct client-to-Cloudinary file uploads (issuing signed credentials and confirming metadata to eliminate bottlenecks), proxying file downloads to prevent direct CDN exposure, and aggressively defending storage quotas via Node-Cron.
-
-### Mobile WebSocket Resilience
-On Android/iOS, opening the native file picker suspends the browser's JavaScript execution and can kill TCP connections. Qubix handles this with a multi-layered recovery system:
-*   **Server-side RFC6455 Pings (20s interval):** Native WebSocket ping frames keep connections alive through Render's load balancer, even when client JS is frozen.
-*   **2-Minute Grace Period:** On disconnect, user identity is preserved in memory for 2 minutes, allowing seamless session recovery via `sessionId`.
-*   **Silent Reconnect (`suppressDisconnectUI`):** When the file picker is active, socket drops are handled silently — the user never sees "Connection Lost".
-*   **PIN Caching:** When in a PIN-protected room, the client caches the PIN in memory to seamlessly rejoin after reconnection.
+A high-performance Node.js server acts as the dispatch hub for ephemeral routing.
+*   **Core:** Express.js (HTTP API), `ws` library (WebSocket Engine)
+*   **Database (In-Memory Datastore):** Redis. Used exclusively to map and expire temporary messages, typing states, and emoji reactions using native Redis TTLs.
+*   **File Storage:** Cloudinary CDN is utilized securely via server presigned-URL issuance to keep heavy bandwidth off the WebSocket pipe.
 
 ## ⚙️ Local Development Setup
 
-To run Qubix locally, you will need concurrently running terminals for the Frontend and the Backend.
+Thanks to the dynamic environment config, testing AQchat locally is frictionless. **You DO NOT need to change any hardcoded URLs.** Vite automatically detects `npm run dev` and instructs the frontend to connect securely to your local backend at `localhost:3001`.
 
 ### Prerequisites
 *   Node.js (v18+ recommended)
-*   An Upstash Redis Database (Free Tier)
-*   A Cloudinary Account (Free Tier)
+*   An Upstash Redis Database URL
+*   A Cloudinary Account (Cloud Name, API Key, API Secret)
 
 ### 1. Backend Setup
+Navigate to the server directory, install dependencies, and run:
+```bash
+cd server
+npm install
+```
+Create a `.env` in the `server` directory and add your keys:
+```env
+REDIS_HOST=your-upstash-redis-url.upstash.io
+REDIS_PORT=your-upstash-port
+REDIS_PASSWORD=your-upstash-password
+REDIS_TLS=true
 
-1.  Navigate to the server directory:
-    ```bash
-    cd server
-    ```
-2.  Install dependencies:
-    ```bash
-    npm install
-    ```
-3.  Create a `.env` file in the `server` directory and add your credentials:
-    ```env
-    # Redis Configuration (Upstash)
-    REDIS_HOST=your-upstash-redis-url.upstash.io
-    REDIS_PORT=your-upstash-port
-    REDIS_PASSWORD=your-upstash-password
-    REDIS_TLS=true
-
-    # Cloudinary Configuration
-    CLOUDINARY_CLOUD_NAME=your-cloud-name
-    CLOUDINARY_API_KEY=your-api-key
-    CLOUDINARY_API_SECRET=your-api-secret
-    ```
-4.  Start the backend development server:
-    ```bash
-    npm run dev
-    ```
-   *(The backend server typically runs on `http://localhost:3000`)*
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
+```
+Start the backend development server:
+```bash
+npm run build
+npm start
+# Server listens on http://localhost:3001
+```
 
 ### 2. Frontend Setup
-
-1.  Open a new terminal and navigate to the project root:
-    ```bash
-    cd <project-root>
-    ```
-2.  Install dependencies:
-    ```bash
-    npm install
-    ```
-3.  Ensure your `src/types/index.ts` config points to the local backend:
-    ```typescript
-    export const DEFAULT_CONFIG = {
-      wsUrl: 'ws://localhost:3000/ws',
-      apiUrl: 'http://localhost:3000',
-      // ...
-    };
-    ```
-4.  Start the frontend Vite server:
-    ```bash
-    npm run dev
-    ```
-   *(The frontend typically runs on `http://localhost:5173`)*
+Open a new terminal and navigate to the project root:
+```bash
+npm install
+npm run dev
+# Frontend listens on http://localhost:5173
+```
+That's it! Any messages, reactions, or voice notes you perform will seamlessly funnel locally between the two terminal windows. 
 
 ## 🌐 Deployment Workflow
 
-To take Qubix live, you must deploy the Backend and Frontend to separate cloud hosting providers.
-
-### Why not deploy everything on Vercel?
-WebSockets require a **persistent TCP connection** and a **long-running server**. Vercel runs Serverless Functions, which spin up, execute a task, and instantly terminate. If you deploy a WebSocket server on Vercel, the connection immediately closes.
-Thus, we must host the Backend Engine on a persistent platform (like **Render** or **Railway**) and host the Static UI Frontend on a CDN (like **Vercel**).
-
 ### 1. Deploying the Backend (Engine)
-Because the backend relies on persistent WebSocket connections, a platform like [Render.com](https://render.com) is recommended.
+Because the backend relies on persistent WebSocket connections, a platform like [Render.com](https://render.com) or Railway is strictly required over Serverless (Vercel).
+1. Connect your repo to Render ("Web Service").
+2. Root Directory: `server`.
+3. Build Command: `npm install && npm run build`.
+4. Start Command: `npm start`.
+5. Add all `.env` secrets into the Render Dashboard.
+6. Deploy! Render will print a URL `https://your-api.onrender.com`.
 
-1. Push your code to a GitHub repository (Ensure your `server/.env` is ignored!).
-2. Create a new "Web Service" on **Render**.
-3. Connect your GitHub repository.
-4. Set the **Root Directory** to `server`.
-5. Set **Build Command** to `npm install && npm run build`.
-6. Set **Start Command** to `npm start`.
-7. Go to the "Environment" tab and add all the variables from your local `.env` file (Redis and Cloudinary keys).
-8. Deploy. Render will provide a live URL (e.g., `https://qubix-api.onrender.com`).
-
-### 2. Connecting Frontend to the Live Backend
-Before deploying the frontend, update `src/types/index.ts` to point to the newly deployed Render backend:
+### 2. Connecting Frontend to Production
+If you deploy the Backend to a custom domain (e.g. `your-api.onrender.com`), make sure `src/types/index.ts` points to it for production builds:
 ```typescript
 export const DEFAULT_CONFIG = {
-  wsUrl: 'wss://qubix-api.onrender.com/ws', // Note the 'wss://' for secure WebSockets
-  apiUrl: 'https://qubix-api.onrender.com',
-  // ...
+  wsUrl: import.meta.env.DEV ? 'ws://localhost:3001/ws' : 'wss://your-api.onrender.com/ws',
+  apiUrl: import.meta.env.DEV ? 'http://localhost:3001' : 'https://your-api.onrender.com',
 };
 ```
-Commit and push this change to GitHub.
 
-### 3. Deploying the Frontend (Website)
-The React/Vite app is a static site and can be hosted easily on platforms like [Vercel](https://vercel.com).
-
-1. Create a new Project on **Vercel**.
-2. Connect your GitHub repository.
-3. Vercel will auto-detect the **Vite** framework.
-4. Leave the **Root Directory** empty (as `./` the root).
-5. Click **Deploy**.
-
-Vercel will provide a scalable, live web URL (e.g., `https://aqchat.vercel.app`). Your ephemeral chat platform is now globally scalable and production-ready!
+### 3. Deploying the Frontend (UI)
+The React/Vite app is a highly-cacheable static site perfect for [Vercel](https://vercel.com) or Netlify.
+1. Create a new Project on Vercel and link your Repo.
+2. Root Directory: `./` (Empty).
+3. Vercel automatically detects Vite and executes `npm run build`.
+4. Deploy!
 
 ## 📄 License
 
-This project is open source and available under the [MIT License](LICENSE).
+This project is open-source and available under the [MIT License](LICENSE).
