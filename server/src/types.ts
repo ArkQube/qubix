@@ -19,6 +19,7 @@ export interface ServerMessage {
   type: 'text' | 'file' | 'system';
   roomId?: string;
   fileData?: ServerFileData;
+  reactions?: Record<string, string[]>;
 }
 
 export interface ServerFileData {
@@ -87,6 +88,8 @@ export const WS_MESSAGE_TYPES = {
   PING: 'ping',
   SUSPEND: 'suspend',
   RESUME: 'resume',
+  ADD_REACTION: 'add_reaction',
+  REMOVE_REACTION: 'remove_reaction',
 
   // Server to Client
   AUTH_SUCCESS: 'auth_success',
@@ -101,6 +104,7 @@ export const WS_MESSAGE_TYPES = {
   ROOM_LEFT: 'room_left',
   ROOM_ERROR: 'room_error',
   FILE_DELETED: 'file_deleted',
+  REACTION_UPDATE: 'reaction_update',
   ERROR: 'error',
   PONG: 'pong',
 } as const;

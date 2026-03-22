@@ -593,6 +593,75 @@ messageHandlers.set(WS_MESSAGE_TYPES.RESUME, async (ws: any) => {
   console.log('[WS] Client resumed (file picker closed)');
 });
 
+// Reaction handlers
+messageHandlers.set(WS_MESSAGE_TYPES.ADD_REACTION, async (ws, userId, payload) => {
+  const user = users.get(userId);
+  if (!user) return;
+
+  const { messageId, emoji } = payload;
+  const messageData = await redis.get(REDIS_KEYS.message(messageId));
+  if (!messageData) return;
+
+  const message: ServerMessage = JSON.parse(messageData);
+  if (!message.reactions) message.reactions = {};
+  if (!message.reactions[emoji]) message.reactions[emoji] = [];
+  
+  if (!message.reactions[emoji].includes(user.username)) {
+    message.reactions[emoji].push(user.username);
+  }
+
+  await redis.setex(
+    REDIS_KEYS.message(messageId),
+    Math.max(1, Math.floor((message.expiresAt - Date.now()) / 1000)),
+    JSON.stringify(message)
+  );
+
+  const update = {
+    type: WS_MESSAGE_TYPES.REACTION_UPDATE,
+    payload: { messageId, reactions: message.reactions, roomId: message.roomId || 'global' }
+  };
+
+  if (message.roomId) {
+    broadcastToRoom(message.roomId, update);
+  } else {
+    broadcastToAll(update);
+  }
+});
+
+messageHandlers.set(WS_MESSAGE_TYPES.REMOVE_REACTION, async (ws, userId, payload) => {
+  const user = users.get(userId);
+  if (!user) return;
+
+  const { messageId, emoji } = payload;
+  const messageData = await redis.get(REDIS_KEYS.message(messageId));
+  if (!messageData) return;
+
+  const message: ServerMessage = JSON.parse(messageData);
+  if (!message.reactions || !message.reactions[emoji]) return;
+  
+  message.reactions[emoji] = message.reactions[emoji].filter(name => name !== user.username);
+  if (message.reactions[emoji].length === 0) {
+    delete message.reactions[emoji];
+  }
+
+  await redis.setex(
+    REDIS_KEYS.message(messageId),
+    Math.max(1, Math.floor((message.expiresAt - Date.now()) / 1000)),
+    JSON.stringify(message)
+  );
+
+  const update = {
+    type: WS_MESSAGE_TYPES.REACTION_UPDATE,
+    payload: { messageId, reactions: message.reactions, roomId: message.roomId || 'global' }
+  };
+
+  if (message.roomId) {
+    broadcastToRoom(message.roomId, update);
+  } else {
+    broadcastToAll(update);
+  }
+});
+
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
 
 function sendToClient(ws: WebSocket, message: any) {

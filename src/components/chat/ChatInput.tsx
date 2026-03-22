@@ -6,7 +6,10 @@ import {
   Paperclip, 
   X, 
   File as FileIcon,
-  Loader2
+  Loader2,
+  Mic,
+  Square,
+  Trash2
 } from 'lucide-react';
 import { formatFileSize, validateFileSize } from '@/lib/utils';
 import { DEFAULT_CONFIG } from '@/types';
@@ -31,6 +34,13 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const pickerOpenRef = useRef(false);
   const { pausePing, resumePing, sendSuspend, sendResume, forceReconnect, suppressDisconnectUI } = useWebSocket();
   const { compressImages } = useImageCompression();
+
+  // Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const handleSend = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
@@ -188,6 +198,63 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     }
   }, []);
 
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const audioFile = new File([audioBlob], `Voice-Note-${new Date().toLocaleTimeString().replace(/:/g,'-')}.webm`, { type: 'audio/webm' });
+        setSelectedFile(audioFile);
+        audioChunksRef.current = [];
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingTime((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      alert("Microphone access is required to record voice notes.");
+    }
+  };
+
+  const stopRecording = (cancel = false) => {
+    if (mediaRecorderRef.current && isRecording) {
+      if (cancel) {
+        mediaRecorderRef.current.onstop = null; // Prevent file creation if cancelled
+        audioChunksRef.current = [];
+      }
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      setIsRecording(false);
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    }
+  };
+
+  // Cleanup recording on unmount
+  useEffect(() => {
+    return () => {
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
   const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setMessage(e.target.value);
     
@@ -251,32 +318,74 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
           accept="*/*"
         />
 
-        {/* Message Input */}
-        <div className="flex-1 relative">
-          <Textarea
-            ref={textareaRef}
-            value={message}
-            onChange={handleTextareaChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
-            className="min-h-[44px] max-h-[120px] resize-none pr-12 py-3"
-            disabled={disabled || isUploading}
-            rows={1}
-          />
+        {/* Message Input or Recording UI */}
+        <div className="flex-1 relative border rounded-md bg-background flex items-center shadow-sm">
+          {isRecording ? (
+            <div className="flex-1 min-h-[44px] flex items-center justify-between px-4 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center gap-3 text-destructive">
+                <div className="w-2.5 h-2.5 rounded-full bg-destructive animate-pulse" />
+                <span className="font-mono text-sm tracking-widest">{new Date(recordingTime * 1000).toISOString().substring(14, 19)}</span>
+              </div>
+              <span className="text-sm font-medium animate-pulse opacity-70">Recording...</span>
+            </div>
+          ) : (
+            <Textarea
+              ref={textareaRef}
+              value={message}
+              onChange={handleTextareaChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Type a message..."
+              className="min-h-[44px] max-h-[120px] resize-none py-3 border-0 focus-visible:ring-0 shadow-none"
+              disabled={disabled || isUploading || isRecording}
+              rows={1}
+            />
+          )}
         </div>
 
-        {/* Send Button */}
-        <Button
-          className="flex-shrink-0 h-10 w-10"
-          onClick={handleSend}
-          disabled={isDisabled}
-        >
-          {isUploading ? (
-            <Loader2 className="w-5 h-5 animate-spin" />
-          ) : (
-            <Send className="w-5 h-5" />
-          )}
-        </Button>
+        {/* Action Button: Cancel Recording, Send, or Mic */}
+        {isRecording ? (
+          <>
+            <Button
+              variant="outline"
+              className="flex-shrink-0 h-10 w-10 text-destructive hover:text-destructive hover:bg-destructive/10"
+              onClick={() => stopRecording(true)}
+              disabled={disabled || isUploading}
+              title="Cancel recording"
+            >
+              <Trash2 className="w-5 h-5" />
+            </Button>
+            <Button
+              className="flex-shrink-0 h-10 w-10"
+              onClick={() => stopRecording(false)}
+              disabled={disabled || isUploading}
+              title="Stop and attach"
+            >
+              <Square className="w-4 h-4 fill-current" />
+            </Button>
+          </>
+        ) : (!message.trim() && !selectedFile) ? (
+          <Button
+            variant="secondary"
+            className="flex-shrink-0 h-10 w-10"
+            onClick={startRecording}
+            disabled={disabled || isUploading}
+            title="Record Voice Note"
+          >
+            <Mic className="w-5 h-5" />
+          </Button>
+        ) : (
+          <Button
+            className="flex-shrink-0 h-10 w-10"
+            onClick={handleSend}
+            disabled={isDisabled || isUploading || isRecording}
+          >
+            {isUploading ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <Send className="w-5 h-5" />
+            )}
+          </Button>
+        )}
       </div>
 
       {/* Upload Progress */}

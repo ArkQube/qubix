@@ -21,6 +21,8 @@ interface WebSocketContextType {
   leaveRoom: () => void;
   sendTyping: (isTyping: boolean) => void;
   deleteMessage: (messageId: string) => void;
+  addReaction: (messageId: string, emoji: string) => void;
+  removeReaction: (messageId: string, emoji: string) => void;
   uploadFile: (file: File, uploadId?: string) => Promise<any>;
   setUsername: (username: string) => void;
   pausePing: () => void;
@@ -223,6 +225,17 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         setMessages(prev => prev.filter(m => m.id !== payload.messageId));
         break;
 
+      case 'reaction_update': {
+        const { messageId, reactions, roomId: targetRoomId } = payload;
+        const myRoom = currentRoomRef.current?.id || 'global';
+        if (targetRoomId !== myRoom) break;
+
+        setMessages(prev => prev.map(m => 
+          m.id === messageId ? { ...m, reactions } : m
+        ));
+        break;
+      }
+
       case 'file_deleted':
         break;
 
@@ -409,6 +422,14 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
   const deleteMessage = useCallback((messageId: string) => {
     sendRaw({ type: 'delete_message', payload: { messageId } });
+  }, [sendRaw]);
+
+  const addReaction = useCallback((messageId: string, emoji: string) => {
+    sendRaw({ type: 'add_reaction', payload: { messageId, emoji } });
+  }, [sendRaw]);
+
+  const removeReaction = useCallback((messageId: string, emoji: string) => {
+    sendRaw({ type: 'remove_reaction', payload: { messageId, emoji } });
   }, [sendRaw]);
 
   const uploadFile = useCallback(async (file: File, uploadId?: string): Promise<any> => {
@@ -616,6 +637,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     leaveRoom,
     sendTyping,
     deleteMessage,
+    addReaction,
+    removeReaction,
     uploadFile,
     setUsername,
     pausePing,

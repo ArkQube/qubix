@@ -19,6 +19,7 @@ export interface Message {
   roomId?: string;
   fileData?: FileData;
   status?: 'sending' | 'sent' | 'error';
+  reactions?: Record<string, string[]>;
 }
 
 export interface FileData {
@@ -70,7 +71,10 @@ export type MessageType =
   | 'user_joined'
   | 'user_left'
   | 'error'
-  | 'pong';
+  | 'pong'
+  | 'add_reaction'
+  | 'remove_reaction'
+  | 'reaction_update';
 
 export interface UploadProgress {
   fileId: string;
@@ -93,8 +97,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   messageLifetime: 60 * 60 * 1000, // 1 hour
   roomLifetime: 12 * 60 * 60 * 1000, // 12 hours
   fileLifetime: 60 * 60 * 1000, // 1 hour
-  wsUrl: 'wss://qubix-rr27.onrender.com/ws',
-  apiUrl: 'https://qubix-rr27.onrender.com',
+  wsUrl: import.meta.env.DEV ? 'ws://localhost:3001/ws' : 'wss://qubix-rr27.onrender.com/ws',
+  apiUrl: import.meta.env.DEV ? 'http://localhost:3001' : 'https://qubix-rr27.onrender.com',
 };
 
 // Anonymous username adjectives and nouns for random generation

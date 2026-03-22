@@ -1,9 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import he from 'he';
-import Linkify from 'linkify-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Message, User } from '@/types';
 import { DEFAULT_CONFIG } from '@/types';
 import { formatTime, formatFileSize, getFileIcon, isPreviewableFile, getTimeRemaining } from '@/lib/utils';
+import { useWebSocket } from '@/contexts/WebSocketContext';
 import { Button } from '@/components/ui/button';
 import {
   FileText,
@@ -15,8 +19,11 @@ import {
   File,
   Download,
   Trash2,
-  Clock
+  Clock,
+  SmilePlus
 } from 'lucide-react';
+
+const EMOJI_OPTIONS = ['👍', '❤️', '😂', '🔥', '👀', '✨'];
 
 interface ChatMessageProps {
   message: Message;
@@ -27,12 +34,23 @@ interface ChatMessageProps {
 export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps) {
   const [isCopied, setIsCopied] = useState(false);
   const [isActive, setIsActive] = useState(false); // Touch-screen overlay toggle state
-  const [isExpanded, setIsExpanded] = useState(false); // See more / See less toggle
   const messageRef = useRef<HTMLDivElement>(null);
 
   const isSystemMessage = message.type === 'system';
-  // Use both socket ID and persistent username to maintain visual ownership across page reloads
   const isOwnMessage = !isSystemMessage && (currentUser?.id === message.sender?.id || currentUser?.username === message.sender?.username);
+
+  const { addReaction, removeReaction } = useWebSocket();
+
+  const handleToggleReaction = (emoji: string) => {
+    if (!currentUser) return;
+    const hasReacted = message.reactions?.[emoji]?.includes(currentUser.username);
+    if (hasReacted) {
+      removeReaction(message.id, emoji);
+    } else {
+      addReaction(message.id, emoji);
+    }
+    setIsActive(false);
+  };
 
   const copyTextToClipboard = async () => {
     if (message.content) {
@@ -163,38 +181,54 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
             } ${isActive ? 'ring-2 ring-primary/50' : ''}`}
         >
           {/* Text Content */}
-          {message.content && (() => {
-            const decoded = he.decode(message.content);
-            const isLong = decoded.length > 100;
-            const displayText = isLong && !isExpanded ? decoded.slice(0, 100) + '…' : decoded;
+          {message.content && (
+            <div className="text-[15px] leading-relaxed break-words" style={{ overflowWrap: 'anywhere' }}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  code({ node, inline, className, children, ...props }: any) {
+                    const match = /language-(\w+)/.exec(className || '');
+                    return !inline ? (
+                      <div className="my-2 rounded-md overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <SyntaxHighlighter
+                          style={vscDarkPlus as any}
+                          language={match ? match[1] : 'text'}
+                          PreTag="div"
+                          className="!m-0 !text-xs !bg-[#1E1E1E]"
+                          showLineNumbers={true}
+                          {...props}
+                        >
+                          {String(children).replace(/\n$/, '')}
+                        </SyntaxHighlighter>
+                      </div>
+                    ) : (
+                      <code className="bg-black/20 dark:bg-white/20 px-1.5 py-0.5 rounded font-mono text-[13px]" {...props}>
+                        {children}
+                      </code>
+                    );
+                  },
+                  a: ({ node, ...props }) => (
+                    <a {...props} target="_blank" rel="noopener noreferrer" className="underline font-medium hover:opacity-80 transition-opacity text-blue-400 dark:text-blue-300" onClick={e => e.stopPropagation()} />
+                  ),
+                  p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
+                  ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
+                  ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-2 space-y-1" {...props} />,
+                  blockquote: ({ node, ...props }) => <blockquote className="border-l-2 border-primary/50 pl-3 italic opacity-80 my-2" {...props} />,
+                }}
+              >
+                {he.decode(message.content)}
+              </ReactMarkdown>
+            </div>
+          )}
 
-            return (
-              <div className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>
-                <Linkify options={{
-                  target: '_blank',
-                  rel: 'noopener noreferrer',
-                  className: 'underline font-medium hover:opacity-80 transition-opacity'
-                }}>
-                  {displayText}
-                </Linkify>
-                {isLong && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
-                    className={`ml-1 text-xs font-medium opacity-70 hover:opacity-100 transition-opacity ${
-                      isOwnMessage ? 'text-primary-foreground' : 'text-primary'
-                    }`}
-                  >
-                    {isExpanded ? 'See less' : 'See more'}
-                  </button>
-                )}
-              </div>
-            );
-          })()}
-
-        {/* File Attachment */}
+          {/* File Attachment */}
           {message.fileData && (
             <div className="mt-2">
-              {isPreviewableFile(message.fileData.fileType) ? (
+              {message.fileData.fileType.startsWith('audio/') ? (
+                <div className={`rounded-lg p-2 flex flex-col gap-2 ${isOwnMessage ? 'bg-primary-foreground/10' : 'bg-background/50'}`}>
+                  <audio controls src={message.fileData.url} className="h-10 w-[200px] md:w-[250px] outline-none" />
+                </div>
+              ) : isPreviewableFile(message.fileData.fileType) ? (
                 <div className="rounded-lg overflow-hidden relative group/image">
                   <img
                     src={message.fileData.url}
@@ -241,11 +275,60 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
             </div>
           )}
 
-          {/* Action Buttons (Copy and Delete) */}
+          {/* Render Reactions */}
+          {message.reactions && Object.keys(message.reactions).length > 0 && (
+            <div className={`flex flex-wrap gap-1 mt-2 -mb-1 ${isOwnMessage ? 'justify-end' : 'justify-start'}`}>
+              {Object.entries(message.reactions).map(([emoji, users]) => {
+                const hasReacted = currentUser && users.includes(currentUser.username);
+                return (
+                  <button
+                    key={emoji}
+                    onClick={(e) => { e.stopPropagation(); handleToggleReaction(emoji); }}
+                    className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors shadow-sm
+                      ${hasReacted 
+                        ? 'bg-primary/20 border-primary/30 text-foreground' 
+                        : 'bg-background/80 border-border/50 text-muted-foreground hover:bg-background'
+                      }`}
+                    title={`${users.join(', ')} reacted with ${emoji}`}
+                  >
+                    <span>{emoji}</span>
+                    <span className="opacity-80 pb-[1px]">{users.length}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Action Buttons (Copy, Delete, React) */}
           <div className={`absolute top-2 right-2 md:-top-3 
             ${isActive ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none md:pointer-events-auto'} 
             md:opacity-0 md:group-hover:opacity-100 md:scale-100 transition-all flex gap-1 shadow-md md:shadow-sm rounded-md bg-background/95 md:bg-background border p-1 z-10 backdrop-blur-md md:backdrop-blur-none origin-bottom-right md:origin-center
             ${isOwnMessage ? 'md:right-0' : 'md:-right-2 md:translate-x-full'}`}>
+            
+            {/* Mobile Reaction Picker Menu (Only shows on tap) */}
+            <div className={`flex items-center border-r pr-1 mr-1 ${isActive ? 'flex' : 'hidden md:flex'}`}>
+              <div className="group/react relative">
+                <button
+                  onClick={(e) => { e.stopPropagation(); }}
+                  className="p-1.5 hover:bg-muted rounded-md transition-colors text-foreground/70 hover:text-foreground md:hidden"
+                  title="React"
+                >
+                  <SmilePlus className="w-4 h-4" />
+                </button>
+                <div className="hidden md:flex items-center md:static absolute bottom-full mb-2 md:mb-0 right-0 bg-background border shadow-md rounded-full p-1 gap-1 md:border-none md:shadow-none md:p-0 md:bg-transparent">
+                  {EMOJI_OPTIONS.map(emoji => (
+                    <button
+                      key={emoji}
+                      onClick={(e) => { e.stopPropagation(); handleToggleReaction(emoji); }}
+                      className="w-7 h-7 flex items-center justify-center hover:bg-muted rounded-full transition-transform hover:scale-110 active:scale-95 text-base"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             {message.content && (
               <button
                 onClick={(e) => { e.stopPropagation(); copyTextToClipboard(); }}
