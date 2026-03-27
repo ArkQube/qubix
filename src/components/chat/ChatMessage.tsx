@@ -72,17 +72,14 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
     try {
       const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}`;
 
-      // The backend proxy sends "Content-Disposition: attachment", so we can 
-      // synchronously trigger the Native Browser Download without async fetching.
-      // This avoids User-Gesture expiration blocking the download, and gives the UI a proper progress bar!
-      const link = document.createElement('a');
-      link.href = proxyUrl;
-      link.download = message.fileData.fileName; // Ignored for cross-origin, but the backend header covers it
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      // Open in a new tab — the backend sends Content-Disposition: attachment
+      // which forces a download. If the proxy fails, it redirects to Cloudinary
+      // directly. Using _blank ensures the chat page is never navigated away.
+      window.open(proxyUrl, '_blank');
     } catch (err) {
       console.error('Download error:', err);
+      // Ultimate fallback: open the raw Cloudinary URL directly
+      window.open(message.fileData.url, '_blank');
     }
   };
 

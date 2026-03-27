@@ -930,6 +930,20 @@ app.get('/api/download', async (req, res) => {
     return res.status(403).json({ error: 'Only Cloudinary URLs are allowed' });
   }
 
+  // ── Build a fl_attachment Cloudinary URL ────────────────────────────────────
+  // Cloudinary supports a native "force download" flag: fl_attachment
+  // By injecting this into the URL path, Cloudinary itself serves the file with
+  // Content-Disposition: attachment — no proxy streaming required.
+  //
+  // This is far more reliable than proxying because:
+  //   1. No intermediate memory/streaming overhead on our server
+  //   2. Works for ALL resource types (image, video, raw)
+  //   3. Cloudinary CDN handles it natively with proper caching
+  //
+  // URL format: .../upload/fl_attachment:filename/...
+  const safeFileName = encodeURIComponent(fileName.replace(/\.[^.]+$/, '')); // strip extension for fl_attachment
+  const attachmentUrl = fileUrl.replace('/upload/', `/upload/fl_attachment:${safeFileName}/`);
+
   try {
     const response = await axios({
       url: fileUrl,
@@ -939,37 +953,35 @@ app.get('/api/download', async (req, res) => {
         'Accept': '*/*',
         'User-Agent': 'Mozilla/5.0 (compatible; Arkion/2.0)',
       },
-      // Forward the real Content-Length so browsers show a progress bar
       validateStatus: () => true,
-      decompress: false, // PREVENT AXIOS FROM CORRUPTING GZIPPED STREAMS
+      maxRedirects: 5,
+      timeout: 15000, // 15s timeout to avoid hanging
     });
 
     if (response.status !== 200) {
-      return res.status(response.status).json({ error: 'Upstream error' });
+      // ── FALLBACK: redirect the browser directly to Cloudinary ───────────
+      // Instead of showing a useless JSON error page, redirect to Cloudinary's
+      // native fl_attachment URL so the user still gets their file.
+      console.warn(`[DOWNLOAD] Upstream returned ${response.status} for ${fileUrl} — redirecting to Cloudinary directly`);
+      return res.redirect(attachmentUrl);
     }
 
     // Force download — no inline preview, no new tab
-    // Use RFC 5987 encoding so non-ASCII filenames (Chinese, etc) survive HTTP headers
-    const safeFileName = encodeURIComponent(fileName).replace(/'/g, '%27');
-    // RFC 5987 encoding supports any Unicode filename (Chinese, Japanese, emoji, etc)
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeFileName}; filename="download"`);
+    const encodedFileName = encodeURIComponent(fileName).replace(/'/g, '%27');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodedFileName}; filename="download"`);
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
 
     // Forward content-length so the browser can show download progress
     if (response.headers['content-length']) {
       res.setHeader('Content-Length', response.headers['content-length']);
     }
-    
-    // Forward encoding to match the un-decompressed payload
-    if (response.headers['content-encoding']) {
-      res.setHeader('Content-Encoding', response.headers['content-encoding']);
-    }
 
     // Stream directly to the client — no buffering in memory
     response.data.pipe(res);
   } catch (err: any) {
-    console.error('Proxy download error:', err.message);
-    res.status(500).json({ error: 'Failed to download file' });
+    // ── FALLBACK on network/timeout errors too ─────────────────────────────
+    console.error('Proxy download error:', err.message, '— redirecting to Cloudinary');
+    return res.redirect(attachmentUrl);
   }
 });
 
