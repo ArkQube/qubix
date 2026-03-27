@@ -487,10 +487,17 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       cloudinaryFormData.append('signature', signature);
       cloudinaryFormData.append('folder', folder);
 
+      const getResourceType = (mimeType: string) => {
+        if (mimeType.startsWith('image/')) return 'image';
+        if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) return 'video';
+        return 'raw';
+      };
+      const resourceType = getResourceType(file.type);
+
       // Use XHR for real-time upload progress
       const cloudinaryResult = await new Promise<any>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`);
+        xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`);
 
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
