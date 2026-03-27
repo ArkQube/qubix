@@ -64,30 +64,23 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
     }
   };
 
-  const downloadFile = async (e: React.MouseEvent) => {
+  const downloadFile = (e: React.MouseEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     if (!message.fileData) return;
 
     try {
       const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}`;
 
-      // Fetch the file as a blob to guarantee same-origin and bypass browser strict security
-      const response = await fetch(proxyUrl);
-      if (!response.ok) throw new Error('Failed to download');
-
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-
-      // Create a temporary hidden link element to safely trigger a native Save Dialog
+      // The backend proxy sends "Content-Disposition: attachment", so we can 
+      // synchronously trigger the Native Browser Download without async fetching.
+      // This avoids User-Gesture expiration blocking the download, and gives the UI a proper progress bar!
       const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = message.fileData.fileName;
+      link.href = proxyUrl;
+      link.download = message.fileData.fileName; // Ignored for cross-origin, but the backend header covers it
       document.body.appendChild(link);
       link.click();
-
-      // Cleanup
       document.body.removeChild(link);
-      window.URL.revokeObjectURL(blobUrl);
     } catch (err) {
       console.error('Download error:', err);
     }
