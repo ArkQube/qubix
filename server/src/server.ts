@@ -941,6 +941,7 @@ app.get('/api/download', async (req, res) => {
       },
       // Forward the real Content-Length so browsers show a progress bar
       validateStatus: () => true,
+      decompress: false, // PREVENT AXIOS FROM CORRUPTING GZIPPED STREAMS
     });
 
     if (response.status !== 200) {
@@ -957,6 +958,11 @@ app.get('/api/download', async (req, res) => {
     // Forward content-length so the browser can show download progress
     if (response.headers['content-length']) {
       res.setHeader('Content-Length', response.headers['content-length']);
+    }
+    
+    // Forward encoding to match the un-decompressed payload
+    if (response.headers['content-encoding']) {
+      res.setHeader('Content-Encoding', response.headers['content-encoding']);
     }
 
     // Stream directly to the client — no buffering in memory
