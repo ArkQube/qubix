@@ -490,7 +490,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       const getResourceType = (mimeType: string) => {
         if (mimeType.startsWith('image/')) return 'image';
         if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) return 'video';
-        if (mimeType === 'application/pdf') return 'image'; // Cloudinary natively supports PDFs under 'image'
         return 'raw';
       };
       const resourceType = getResourceType(file.type);

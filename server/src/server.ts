@@ -128,10 +128,7 @@ function getCloudinaryResourceType(
 ): 'image' | 'video' | 'raw' {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) return 'video';
-  // PDFs are natively supported by Cloudinary under 'image' resource type.
-  // Using 'raw' causes 401 on download because raw resources require authenticated access.
-  if (mimeType === 'application/pdf') return 'image';
-  return 'raw'; // ZIP, DOCX, XLS, APK, etc. — store without processing
+  return 'raw'; // PDF, ZIP, DOCX, XLS, APK, etc. — store as-is, download via signed URL
 }
 
 // WebSocket message handlers
@@ -933,10 +930,49 @@ app.get('/api/download', async (req, res) => {
     return res.status(403).json({ error: 'Only Cloudinary URLs are allowed' });
   }
 
+  // ── Helper: extract public_id and resource_type from a Cloudinary URL ──────
+  // URL format: https://res.cloudinary.com/{cloud}/{type}/upload/v{ver}/{folder}/{file}
+  function parseCloudinaryUrl(url: URL) {
+    const pathParts = url.pathname.split('/');
+    const uploadIdx = pathParts.indexOf('upload');
+    if (uploadIdx === -1) return null;
+
+    const resourceType = pathParts[uploadIdx - 1] as 'image' | 'video' | 'raw';
+    const afterUpload = pathParts.slice(uploadIdx + 1);
+    // Skip version segment (e.g. "v1774675469")
+    const startIdx = afterUpload[0]?.match(/^v\d+$/) ? 1 : 0;
+    let publicId = afterUpload.slice(startIdx).join('/');
+    // For raw: keep extension (arkion-uploads/abc.pdf)
+    // For image/video: strip extension (arkion-uploads/abc)
+    if (resourceType !== 'raw') {
+      publicId = publicId.replace(/\.[^.]+$/, '');
+    }
+    return { resourceType, publicId };
+  }
+
+  function generateSignedUrl(resourceType: string, publicId: string): string {
+    return cloudinary.url(publicId, {
+      resource_type: resourceType,
+      type: 'upload',
+      sign_url: true,
+      secure: true,
+    });
+  }
+
   try {
-    // ── Attempt 1: Direct fetch (works for image/video resources) ────────────
+    const parsed = parseCloudinaryUrl(parsedUrl);
+    let fetchUrl = fileUrl;
+
+    // ── For 'raw' resources, ALWAYS use a signed URL ─────────────────────────
+    // Cloudinary requires authentication for raw resources (returns 401 otherwise).
+    // Skip the doomed direct fetch entirely — go straight to signed URL.
+    if (parsed && parsed.resourceType === 'raw') {
+      fetchUrl = generateSignedUrl(parsed.resourceType, parsed.publicId);
+      console.log(`[DOWNLOAD] Raw resource detected — using signed URL for ${parsed.publicId}`);
+    }
+
     let response = await axios({
-      url: fileUrl,
+      url: fetchUrl,
       method: 'GET',
       responseType: 'stream',
       headers: {
@@ -947,43 +983,12 @@ app.get('/api/download', async (req, res) => {
       decompress: false,
     });
 
-    // ── Attempt 2: If 401/403, generate a signed Cloudinary URL ──────────────
-    // Cloudinary 'raw' resources (and some restricted assets) require
-    // authenticated access. We extract the public_id from the URL and use the
-    // Cloudinary SDK to build a time-limited signed URL.
-    if (response.status === 401 || response.status === 403) {
+    // ── Fallback: if the fetch failed for ANY reason, try a signed URL ────────
+    // This covers edge cases like expired URLs, restricted assets, etc.
+    if (response.status !== 200 && parsed && fetchUrl === fileUrl) {
       console.log(`[DOWNLOAD] Direct fetch returned ${response.status}, trying signed URL...`);
+      const signedUrl = generateSignedUrl(parsed.resourceType, parsed.publicId);
 
-      // Extract cloud info from URL:
-      // https://res.cloudinary.com/{cloud}/{type}/upload/v{ver}/{folder}/{file}
-      const pathParts = parsedUrl.pathname.split('/');
-      // Find the resource type and public_id
-      const uploadIdx = pathParts.indexOf('upload');
-      if (uploadIdx === -1) {
-        return res.status(500).json({ error: 'Cannot parse Cloudinary URL' });
-      }
-      const resourceType = pathParts[uploadIdx - 1] as 'image' | 'video' | 'raw';
-      // Everything after 'upload/v{version}/' is the public_id (without extension for images, with for raw)
-      const afterUpload = pathParts.slice(uploadIdx + 1);
-      // Skip version segment if present (starts with 'v' followed by digits)
-      const startIdx = afterUpload[0]?.match(/^v\d+$/) ? 1 : 0;
-      let publicId = afterUpload.slice(startIdx).join('/');
-      // For raw resources, keep the extension. For images, strip it.
-      if (resourceType !== 'raw') {
-        publicId = publicId.replace(/\.[^.]+$/, '');
-      }
-
-      // Generate a signed URL valid for 60 seconds
-      const signedUrl = cloudinary.url(publicId, {
-        resource_type: resourceType,
-        type: 'upload',
-        sign_url: true,
-        secure: true,
-      });
-
-      console.log(`[DOWNLOAD] Signed URL generated for ${publicId} (${resourceType})`);
-
-      // Retry with the signed URL
       response = await axios({
         url: signedUrl,
         method: 'GET',
