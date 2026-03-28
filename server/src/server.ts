@@ -128,7 +128,7 @@ function getCloudinaryResourceType(
 ): 'image' | 'video' | 'raw' {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) return 'video';
-  return 'raw'; // PDF, ZIP, DOCX, XLS, APK, etc. — store as-is, download via signed URL
+  return 'raw'; // ZIP, PDF, DOCX, XLS, APK, etc. — store without processing
 }
 
 // WebSocket message handlers
@@ -930,97 +930,81 @@ app.get('/api/download', async (req, res) => {
     return res.status(403).json({ error: 'Only Cloudinary URLs are allowed' });
   }
 
-  // ── Helper: extract public_id and resource_type from a Cloudinary URL ──────
-  // URL format: https://res.cloudinary.com/{cloud}/{type}/upload/v{ver}/{folder}/{file}
-  function parseCloudinaryUrl(url: URL) {
-    const pathParts = url.pathname.split('/');
-    const uploadIdx = pathParts.indexOf('upload');
-    if (uploadIdx === -1) return null;
-
-    const resourceType = pathParts[uploadIdx - 1] as 'image' | 'video' | 'raw';
-    const afterUpload = pathParts.slice(uploadIdx + 1);
-    // Skip version segment (e.g. "v1774675469")
-    const startIdx = afterUpload[0]?.match(/^v\d+$/) ? 1 : 0;
-    let publicId = afterUpload.slice(startIdx).join('/');
-    // For raw: keep extension (arkion-uploads/abc.pdf)
-    // For image/video: strip extension (arkion-uploads/abc)
-    if (resourceType !== 'raw') {
-      publicId = publicId.replace(/\.[^.]+$/, '');
-    }
-    return { resourceType, publicId };
-  }
-
-  function generateSignedUrl(resourceType: string, publicId: string): string {
-    return cloudinary.url(publicId, {
-      resource_type: resourceType,
-      type: 'upload',
-      sign_url: true,
-      secure: true,
-    });
-  }
-
   try {
-    const parsed = parseCloudinaryUrl(parsedUrl);
-    let fetchUrl = fileUrl;
+    // ── FIX: Use Node's native https for streaming downloads ──────────────
+    //
+    // WHY NOT AXIOS?
+    //   axios with `responseType: 'stream'` + `decompress: false` had subtle bugs:
+    //   1. `decompress: false` told axios to NOT decompress, but we'd then forward
+    //      `Content-Encoding: gzip` to the browser — if Cloudinary happened to
+    //      serve uncompressed data for raw resources, the browser would choke.
+    //   2. `validateStatus: () => true` swallowed HTTP errors silently, and with
+    //      streaming, the response body for error pages would still try to pipe.
+    //   3. Redirects: Cloudinary can 301/302 raw resources to a CDN edge;
+    //      axios *usually* handles this, but combined with `decompress: false`
+    //      and streaming, there were edge cases with non-200 responses.
+    //
+    // Node's native https.get properly follows redirects (we handle them
+    // manually up to 5 hops), streams raw bytes without any transformation,
+    // and gives us precise control over headers.
+    //
+    const fetchStream = (targetUrl: string, redirectCount = 0): void => {
+      if (redirectCount > 5) {
+        return void res.status(502).json({ error: 'Too many redirects' });
+      }
 
-    // ── For 'raw' resources, ALWAYS use a signed URL ─────────────────────────
-    // Cloudinary requires authentication for raw resources (returns 401 otherwise).
-    // Skip the doomed direct fetch entirely — go straight to signed URL.
-    if (parsed && parsed.resourceType === 'raw') {
-      fetchUrl = generateSignedUrl(parsed.resourceType, parsed.publicId);
-      console.log(`[DOWNLOAD] Raw resource detected — using signed URL for ${parsed.publicId}`);
-    }
+      const getter = targetUrl.startsWith('https') ? https.get : require('http').get;
 
-    let response = await axios({
-      url: fetchUrl,
-      method: 'GET',
-      responseType: 'stream',
-      headers: {
-        'Accept': '*/*',
-        'User-Agent': 'Mozilla/5.0 (compatible; Arkion/2.0)',
-      },
-      validateStatus: () => true,
-      decompress: false,
-    });
-
-    // ── Fallback: if the fetch failed for ANY reason, try a signed URL ────────
-    // This covers edge cases like expired URLs, restricted assets, etc.
-    if (response.status !== 200 && parsed && fetchUrl === fileUrl) {
-      console.log(`[DOWNLOAD] Direct fetch returned ${response.status}, trying signed URL...`);
-      const signedUrl = generateSignedUrl(parsed.resourceType, parsed.publicId);
-
-      response = await axios({
-        url: signedUrl,
-        method: 'GET',
-        responseType: 'stream',
+      getter(targetUrl, {
         headers: {
           'Accept': '*/*',
           'User-Agent': 'Mozilla/5.0 (compatible; Arkion/2.0)',
         },
-        validateStatus: () => true,
-        decompress: false,
+      }, (upstream: any) => {
+        // Handle redirects manually (301, 302, 307, 308)
+        if ([301, 302, 307, 308].includes(upstream.statusCode) && upstream.headers.location) {
+          upstream.resume(); // Drain the response to free the socket
+          return fetchStream(upstream.headers.location, redirectCount + 1);
+        }
+
+        if (upstream.statusCode !== 200) {
+          console.error(`[Download Proxy] Upstream returned ${upstream.statusCode} for ${targetUrl}`);
+          upstream.resume();
+          return void res.status(upstream.statusCode || 502).json({
+            error: `Upstream error (${upstream.statusCode})`,
+          });
+        }
+
+        // Force download — no inline preview, no new tab
+        const safeFileName = encodeURIComponent(fileName).replace(/'/g, '%27');
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeFileName}; filename="download"`);
+        res.setHeader('Content-Type', upstream.headers['content-type'] || 'application/octet-stream');
+
+        // Forward content-length so the browser can show download progress
+        if (upstream.headers['content-length']) {
+          res.setHeader('Content-Length', upstream.headers['content-length']);
+        }
+
+        // Stream directly to the client — no buffering in memory
+        upstream.pipe(res);
+
+        upstream.on('error', (err: Error) => {
+          console.error('[Download Proxy] Stream error:', err.message);
+          if (!res.headersSent) {
+            res.status(502).json({ error: 'Stream interrupted' });
+          } else {
+            res.end();
+          }
+        });
+      }).on('error', (err: Error) => {
+        console.error('[Download Proxy] Connection error:', err.message);
+        if (!res.headersSent) {
+          res.status(502).json({ error: 'Failed to connect to upstream' });
+        }
       });
-    }
+    };
 
-    if (response.status !== 200) {
-      console.error(`[DOWNLOAD] Upstream returned ${response.status} for ${fileUrl}`);
-      return res.status(response.status).json({ error: 'Upstream error' });
-    }
-
-    // Force download — no inline preview, no new tab
-    const safeFileName = encodeURIComponent(fileName).replace(/'/g, '%27');
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeFileName}; filename="download"`);
-    res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
-
-    if (response.headers['content-length']) {
-      res.setHeader('Content-Length', response.headers['content-length']);
-    }
-    if (response.headers['content-encoding']) {
-      res.setHeader('Content-Encoding', response.headers['content-encoding']);
-    }
-
-    // Stream directly to the client — no buffering in memory
-    response.data.pipe(res);
+    fetchStream(fileUrl);
   } catch (err: any) {
     console.error('Proxy download error:', err.message);
     res.status(500).json({ error: 'Failed to download file' });

@@ -64,32 +64,25 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
     }
   };
 
-  const downloadFile = async (e: React.MouseEvent) => {
+  const downloadFile = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (!message.fileData) return;
 
-    const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}`;
-
     try {
-      const response = await fetch(proxyUrl);
-      if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+      const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}`;
 
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-
+      // The backend proxy sends "Content-Disposition: attachment", so we can 
+      // synchronously trigger the Native Browser Download without async fetching.
+      // This avoids User-Gesture expiration blocking the download, and gives the UI a proper progress bar!
       const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = message.fileData.fileName;
+      link.href = proxyUrl;
+      link.download = message.fileData.fileName; // Ignored for cross-origin, but the backend header covers it
       document.body.appendChild(link);
       link.click();
-
       document.body.removeChild(link);
-      window.URL.revokeObjectURL(blobUrl);
     } catch (err) {
       console.error('Download error:', err);
-      // Fallback: open the proxy URL directly in a new tab
-      window.open(proxyUrl, '_blank');
     }
   };
 
