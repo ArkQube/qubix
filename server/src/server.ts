@@ -128,7 +128,10 @@ function getCloudinaryResourceType(
 ): 'image' | 'video' | 'raw' {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) return 'video';
-  return 'raw'; // ZIP, PDF, DOCX, XLS, APK, etc. — store without processing
+  // PDFs are natively supported by Cloudinary under 'image' resource type.
+  // Using 'raw' causes 401 on download because raw resources require authenticated access.
+  if (mimeType === 'application/pdf') return 'image';
+  return 'raw'; // ZIP, DOCX, XLS, APK, etc. — store without processing
 }
 
 // WebSocket message handlers
@@ -930,22 +933,9 @@ app.get('/api/download', async (req, res) => {
     return res.status(403).json({ error: 'Only Cloudinary URLs are allowed' });
   }
 
-  // ── Build a fl_attachment Cloudinary URL ────────────────────────────────────
-  // Cloudinary supports a native "force download" flag: fl_attachment
-  // By injecting this into the URL path, Cloudinary itself serves the file with
-  // Content-Disposition: attachment — no proxy streaming required.
-  //
-  // This is far more reliable than proxying because:
-  //   1. No intermediate memory/streaming overhead on our server
-  //   2. Works for ALL resource types (image, video, raw)
-  //   3. Cloudinary CDN handles it natively with proper caching
-  //
-  // URL format: .../upload/fl_attachment:filename/...
-  const safeFileName = encodeURIComponent(fileName.replace(/\.[^.]+$/, '')); // strip extension for fl_attachment
-  const attachmentUrl = fileUrl.replace('/upload/', `/upload/fl_attachment:${safeFileName}/`);
-
   try {
-    const response = await axios({
+    // ── Attempt 1: Direct fetch (works for image/video resources) ────────────
+    let response = await axios({
       url: fileUrl,
       method: 'GET',
       responseType: 'stream',
@@ -954,34 +944,81 @@ app.get('/api/download', async (req, res) => {
         'User-Agent': 'Mozilla/5.0 (compatible; Arkion/2.0)',
       },
       validateStatus: () => true,
-      maxRedirects: 5,
-      timeout: 15000, // 15s timeout to avoid hanging
+      decompress: false,
     });
 
+    // ── Attempt 2: If 401/403, generate a signed Cloudinary URL ──────────────
+    // Cloudinary 'raw' resources (and some restricted assets) require
+    // authenticated access. We extract the public_id from the URL and use the
+    // Cloudinary SDK to build a time-limited signed URL.
+    if (response.status === 401 || response.status === 403) {
+      console.log(`[DOWNLOAD] Direct fetch returned ${response.status}, trying signed URL...`);
+
+      // Extract cloud info from URL:
+      // https://res.cloudinary.com/{cloud}/{type}/upload/v{ver}/{folder}/{file}
+      const pathParts = parsedUrl.pathname.split('/');
+      // Find the resource type and public_id
+      const uploadIdx = pathParts.indexOf('upload');
+      if (uploadIdx === -1) {
+        return res.status(500).json({ error: 'Cannot parse Cloudinary URL' });
+      }
+      const resourceType = pathParts[uploadIdx - 1] as 'image' | 'video' | 'raw';
+      // Everything after 'upload/v{version}/' is the public_id (without extension for images, with for raw)
+      const afterUpload = pathParts.slice(uploadIdx + 1);
+      // Skip version segment if present (starts with 'v' followed by digits)
+      const startIdx = afterUpload[0]?.match(/^v\d+$/) ? 1 : 0;
+      let publicId = afterUpload.slice(startIdx).join('/');
+      // For raw resources, keep the extension. For images, strip it.
+      if (resourceType !== 'raw') {
+        publicId = publicId.replace(/\.[^.]+$/, '');
+      }
+
+      // Generate a signed URL valid for 60 seconds
+      const signedUrl = cloudinary.url(publicId, {
+        resource_type: resourceType,
+        type: 'upload',
+        sign_url: true,
+        secure: true,
+      });
+
+      console.log(`[DOWNLOAD] Signed URL generated for ${publicId} (${resourceType})`);
+
+      // Retry with the signed URL
+      response = await axios({
+        url: signedUrl,
+        method: 'GET',
+        responseType: 'stream',
+        headers: {
+          'Accept': '*/*',
+          'User-Agent': 'Mozilla/5.0 (compatible; Arkion/2.0)',
+        },
+        validateStatus: () => true,
+        decompress: false,
+      });
+    }
+
     if (response.status !== 200) {
-      // ── FALLBACK: redirect the browser directly to Cloudinary ───────────
-      // Instead of showing a useless JSON error page, redirect to Cloudinary's
-      // native fl_attachment URL so the user still gets their file.
-      console.warn(`[DOWNLOAD] Upstream returned ${response.status} for ${fileUrl} — redirecting to Cloudinary directly`);
-      return res.redirect(attachmentUrl);
+      console.error(`[DOWNLOAD] Upstream returned ${response.status} for ${fileUrl}`);
+      return res.status(response.status).json({ error: 'Upstream error' });
     }
 
     // Force download — no inline preview, no new tab
-    const encodedFileName = encodeURIComponent(fileName).replace(/'/g, '%27');
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodedFileName}; filename="download"`);
+    const safeFileName = encodeURIComponent(fileName).replace(/'/g, '%27');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeFileName}; filename="download"`);
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
 
-    // Forward content-length so the browser can show download progress
     if (response.headers['content-length']) {
       res.setHeader('Content-Length', response.headers['content-length']);
+    }
+    if (response.headers['content-encoding']) {
+      res.setHeader('Content-Encoding', response.headers['content-encoding']);
     }
 
     // Stream directly to the client — no buffering in memory
     response.data.pipe(res);
   } catch (err: any) {
-    // ── FALLBACK on network/timeout errors too ─────────────────────────────
-    console.error('Proxy download error:', err.message, '— redirecting to Cloudinary');
-    return res.redirect(attachmentUrl);
+    console.error('Proxy download error:', err.message);
+    res.status(500).json({ error: 'Failed to download file' });
   }
 });
 

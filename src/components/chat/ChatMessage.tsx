@@ -64,22 +64,32 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
     }
   };
 
-  const downloadFile = (e: React.MouseEvent) => {
+  const downloadFile = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (!message.fileData) return;
 
-    try {
-      const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}`;
+    const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}`;
 
-      // Open in a new tab — the backend sends Content-Disposition: attachment
-      // which forces a download. If the proxy fails, it redirects to Cloudinary
-      // directly. Using _blank ensures the chat page is never navigated away.
-      window.open(proxyUrl, '_blank');
+    try {
+      const response = await fetch(proxyUrl);
+      if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = message.fileData.fileName;
+      document.body.appendChild(link);
+      link.click();
+
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
     } catch (err) {
       console.error('Download error:', err);
-      // Ultimate fallback: open the raw Cloudinary URL directly
-      window.open(message.fileData.url, '_blank');
+      // Fallback: open the proxy URL directly in a new tab
+      window.open(proxyUrl, '_blank');
     }
   };
 
