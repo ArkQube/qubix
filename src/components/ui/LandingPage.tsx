@@ -111,7 +111,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 flex items-center justify-center">
-                <img src="/Qube.svg" alt="Logo" className="w-full h-full object-contain" />
+                <img src="/logo.svg" alt="Logo" className="w-full h-full object-contain" />
               </div>
               <span className="font-bold text-xl">AQchat</span>
             </div>
@@ -347,7 +347,7 @@ export function LandingPage({ onEnterChat }: LandingPageProps) {
             <div className="flex flex-col md:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 flex items-center justify-center">
-                  <img src="/Qube.svg" alt="Logo" className="w-full h-full object-contain" />
+                  <img src="/logo.svg" alt="Logo" className="w-full h-full object-contain" />
                 </div>
                 <span className="font-semibold">AQchat</span>
               </div>
