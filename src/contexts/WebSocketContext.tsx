@@ -477,7 +477,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         throw new Error(err.error || 'Failed to get upload signature');
       }
 
-      const { signature, timestamp, folder, apiKey, cloudName } = await signRes.json();
+      const { signature, timestamp, folder, access_mode, apiKey, cloudName } = await signRes.json();
 
       // ── Step 2: Upload directly to Cloudinary (file travels once) ─────────
       const cloudinaryFormData = new FormData();
@@ -486,6 +486,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       cloudinaryFormData.append('timestamp', String(timestamp));
       cloudinaryFormData.append('signature', signature);
       cloudinaryFormData.append('folder', folder);
+      // access_mode:'public' must be sent so raw files are publicly accessible.
+      // It was part of the signed params, so it MUST also be in the form data.
+      if (access_mode) cloudinaryFormData.append('access_mode', access_mode);
 
       const getResourceType = (mimeType: string) => {
         if (mimeType.startsWith('image/')) return 'image';

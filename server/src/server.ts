@@ -1086,8 +1086,12 @@ app.post('/api/upload', upload.single('file'), async (req: express.Request, res:
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           resource_type: resourceType,
+          // access_mode:'public' is required for raw resources (PDFs, ZIPs, etc.)
+          // Without it, Cloudinary defaults to 'authenticated' delivery for raw
+          // assets, meaning the URL returns 401 unless a signed URL is used.
+          // Images and videos are public by default; raw files are not.
+          access_mode: 'public',
           folder: 'arkion-uploads',
-          expires_at: Math.floor(Date.now() / 1000) + EXPIRATION_TIMES.file,
         },
         (err, result) => {
           if (err) reject(err);
@@ -1178,11 +1182,15 @@ app.post('/api/upload/sign', async (req: express.Request, res: express.Response)
     if (!user) return res.status(401).json({ error: 'User not found' });
 
     // Generate Cloudinary signature
+    // IMPORTANT: access_mode must be signed so raw files are publicly accessible.
+    // Without signing access_mode:'public', Cloudinary ignores it for raw resources
+    // and defaults to 'authenticated', causing 401 on download.
     const timestamp = Math.floor(Date.now() / 1000);
     const folder = 'arkion-uploads';
     const paramsToSign = {
       timestamp,
       folder,
+      access_mode: 'public',
     };
 
     const signature = cloudinary.utils.api_sign_request(
@@ -1194,6 +1202,7 @@ app.post('/api/upload/sign', async (req: express.Request, res: express.Response)
       signature,
       timestamp,
       folder,
+      access_mode: 'public',
       apiKey: process.env.CLOUDINARY_API_KEY || '',
       cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
     });
