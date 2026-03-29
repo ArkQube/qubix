@@ -931,44 +931,58 @@ app.get('/api/download', async (req, res) => {
   }
 
   try {
-    // ── FIX: Generate a SIGNED URL for raw resources ──────────────────────
+    // ── DEFINITIVE FIX: Use private_download_url for raw resources ────────
     //
-    // WHY THIS IS NEEDED:
-    //   Cloudinary blocks unsigned access to `raw` resources (PDFs, ZIPs,
-    //   DOCX, etc.) by default — returning 401 Unauthorized.  When we
-    //   switched from resource_type:'auto' to resource_type:'raw' for
-    //   non-media files (to prevent Cloudinary transcoding/corruption),
-    //   their plain URLs stopped working.
+    // HISTORY OF THE BUG:
+    //   PDFs are uploaded as resource_type:'raw' (to prevent Cloudinary
+    //   from transcoding/corrupting them). Cloudinary applies DIFFERENT
+    //   delivery policies to raw vs image resources. Specifically, PDFs
+    //   are subject to Cloudinary's PDF feature restrictions even when
+    //   stored as raw — returning 401 Unauthorized on the delivery URL.
+    //   DOCX and ZIP (also raw) happen NOT to trigger this restriction.
     //
-    //   Images and videos are fine because Cloudinary allows unsigned
-    //   access to those resource types.
+    // WHY SIGNED DELIVERY URLs DIDN'T WORK:
+    //   cloudinary.url() with sign_url:true generates a CDN delivery URL
+    //   with an HMAC signature. But for PDFs, Cloudinary's CDN layer still
+    //   enforces PDF-specific feature gating regardless of the signature.
     //
-    // FIX: Detect raw URLs by checking the path for `/raw/upload/`.
-    //   Extract the public ID and use the Cloudinary SDK to generate a
-    //   time-limited signed URL that bypasses the restriction.
+    // THE FIX — private_download_url:
+    //   This method generates a URL to the Cloudinary ADMIN API download
+    //   endpoint: https://api.cloudinary.com/v1_1/{cloud}/raw/download
+    //   It is authenticated with api_key + api_secret, bypassing ALL
+    //   delivery mode restrictions. Works for any asset, any access_mode,
+    //   any resource type — including PDFs.
     //
     let downloadUrl = fileUrl;
 
     const isRawResource = parsedUrl.pathname.includes('/raw/upload/');
     if (isRawResource) {
-      // Extract public ID from URL path:
-      //   /raw/upload/v1234567890/arkion-uploads/abc123.pdf
-      //   → arkion-uploads/abc123.pdf
+      // Extract full public ID (including folder and extension) from URL.
+      //   /dxphtoxro/raw/upload/v1234567890/arkion-uploads/abc123.pdf
+      //   → arkion-uploads/abc123.pdf  (the full public_id Cloudinary uses)
       const rawUploadMatch = parsedUrl.pathname.match(/\/raw\/upload\/(?:v\d+\/)?(.+)$/);
       if (rawUploadMatch) {
-        const publicId = decodeURIComponent(rawUploadMatch[1]);
-        // Generate a signed URL valid for 1 hour
-        downloadUrl = cloudinary.url(publicId, {
+        const publicIdWithExt = decodeURIComponent(rawUploadMatch[1]);
+
+        // Split into publicId (no extension) and format (extension)
+        // Cloudinary's private_download_url requires them separately.
+        const lastDot = publicIdWithExt.lastIndexOf('.');
+        const publicId = lastDot !== -1 ? publicIdWithExt.slice(0, lastDot) : publicIdWithExt;
+        const format   = lastDot !== -1 ? publicIdWithExt.slice(lastDot + 1) : '';
+
+        // Generate an Admin API authenticated download URL.
+        // This is immune to access_mode and CDN delivery restrictions.
+        downloadUrl = cloudinary.utils.private_download_url(publicId, format, {
           resource_type: 'raw',
           type: 'upload',
-          sign_url: true,
-          secure: true,
+          attachment: false, // Let our proxy set Content-Disposition
         });
-        console.log(`[Download Proxy] Signed raw URL for: ${publicId}`);
+
+        console.log(`[Download Proxy] Using private_download_url for: ${publicId}.${format}`);
       }
     }
 
-    // ── Stream the file using Node's native https ─────────────────────────
+    // ── Stream the file to the client ─────────────────────────────────────
     const fetchStream = (targetUrl: string, redirectCount = 0): void => {
       if (redirectCount > 5) {
         return void res.status(502).json({ error: 'Too many redirects' });
@@ -984,7 +998,7 @@ app.get('/api/download', async (req, res) => {
       }, (upstream: any) => {
         // Handle redirects manually (301, 302, 307, 308)
         if ([301, 302, 307, 308].includes(upstream.statusCode) && upstream.headers.location) {
-          upstream.resume(); // Drain the response to free the socket
+          upstream.resume();
           return fetchStream(upstream.headers.location, redirectCount + 1);
         }
 
@@ -1001,27 +1015,20 @@ app.get('/api/download', async (req, res) => {
         res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeFileName}; filename="download"`);
         res.setHeader('Content-Type', upstream.headers['content-type'] || 'application/octet-stream');
 
-        // Forward content-length so the browser can show download progress
         if (upstream.headers['content-length']) {
           res.setHeader('Content-Length', upstream.headers['content-length']);
         }
 
-        // Stream directly to the client — no buffering in memory
         upstream.pipe(res);
 
         upstream.on('error', (err: Error) => {
           console.error('[Download Proxy] Stream error:', err.message);
-          if (!res.headersSent) {
-            res.status(502).json({ error: 'Stream interrupted' });
-          } else {
-            res.end();
-          }
+          if (!res.headersSent) res.status(502).json({ error: 'Stream interrupted' });
+          else res.end();
         });
       }).on('error', (err: Error) => {
         console.error('[Download Proxy] Connection error:', err.message);
-        if (!res.headersSent) {
-          res.status(502).json({ error: 'Failed to connect to upstream' });
-        }
+        if (!res.headersSent) res.status(502).json({ error: 'Failed to connect to upstream' });
       });
     };
 
