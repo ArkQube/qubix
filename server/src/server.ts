@@ -1309,7 +1309,43 @@ cron.schedule('*/10 * * * *', async () => {
       Date.now() - (EXPIRATION_TIMES.globalMessage * 1000)
     );
 
-    // ── 2. Cloudinary 20GB Defensive Garbage Collector ────────────────────────
+    // ── 2. Routine File Cleanup (Cloudinary & Redis) ──────────────────────────
+    // Files are deleted based on their context lifespan:
+    // Global chat files -> 1 hour
+    // Private room files -> 12 hours
+    const routinePasses = [
+      { key: 'files:global', cutoff: Date.now() - (EXPIRATION_TIMES.globalMessage * 1000) },
+      { key: 'files:private', cutoff: Date.now() - (EXPIRATION_TIMES.roomMessage * 1000) }
+    ];
+
+    for (const pass of routinePasses) {
+      const expiredFiles = await redis.zrangebyscore(pass.key, 0, pass.cutoff) as string[];
+      if (expiredFiles.length === 0) continue;
+
+      console.log(`[CRON] Routine Cleanup: Deleting ${expiredFiles.length} expired files from ${pass.key}...`);
+      
+      for (const fileId of expiredFiles) {
+        const fileStr = await redis.get(REDIS_KEYS.file(fileId));
+        if (fileStr) {
+          const fileData = JSON.parse(fileStr);
+          try {
+            await cloudinary.uploader.destroy(fileData.cloudinaryPublicId);
+          } catch (destroyErr) {
+            console.error(`[CRON] Routine Cloudinary destroy failed for ${fileId}`);
+          }
+          await redis.del(REDIS_KEYS.file(fileId));
+
+          // Broadcast deletion to remove from UI visually
+          broadcastToAll({
+            type: WS_MESSAGE_TYPES.FILE_DELETED,
+            payload: { messageId: fileId }
+          });
+        }
+        await redis.zrem(pass.key, fileId);
+      }
+    }
+
+    // ── 3. Cloudinary 20GB Defensive Garbage Collector ────────────────────────
     let usage = await cloudinary.api.usage();
     // usage.storage.usage is in bytes. Check against 20GB limit.
     let usedGB = usage.storage.usage / (1024 * 1024 * 1024);
@@ -1317,13 +1353,13 @@ cron.schedule('*/10 * * * *', async () => {
     if (usedGB > 20) {
       console.warn(`[CRITICAL] Cloudinary quota at ${usedGB.toFixed(2)}GB (>20GB limit). Triggering aggressive cull.`);
 
-      const passes = [
+      const emergencyPasses = [
         { key: 'files:global', cutoff: Date.now() - (30 * 60 * 1000) },  // Global > 30m
         { key: 'files:global', cutoff: Date.now() - (15 * 60 * 1000) },  // Global > 15m
         { key: 'files:private', cutoff: Date.now() - (60 * 60 * 1000) }  // Private > 60m
       ];
 
-      for (const pass of passes) {
+      for (const pass of emergencyPasses) {
         if (usedGB <= 20) {
           console.log(`[CRON] Garbage collector successfully reduced quota below 20GB.`);
           break;
@@ -1332,7 +1368,7 @@ cron.schedule('*/10 * * * *', async () => {
         const oldFiles = await redis.zrangebyscore(pass.key, 0, pass.cutoff) as string[];
         if (oldFiles.length === 0) continue;
 
-        console.log(`[CRON] Deleting ${oldFiles.length} files from ${pass.key}...`);
+        console.log(`[CRON] Emergency Cull: Deleting ${oldFiles.length} files from ${pass.key}...`);
 
         for (const fileId of oldFiles) {
           const fileStr = await redis.get(REDIS_KEYS.file(fileId));
@@ -1341,7 +1377,7 @@ cron.schedule('*/10 * * * *', async () => {
             try {
               await cloudinary.uploader.destroy(fileData.cloudinaryPublicId);
             } catch (destroyErr) {
-              console.error(`[CRON] Cloudinary destroy failed for ${fileId}`);
+              console.error(`[CRON] Emergency Cloudinary destroy failed for ${fileId}`);
             }
             await redis.del(REDIS_KEYS.file(fileId));
 
