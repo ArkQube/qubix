@@ -964,11 +964,10 @@ app.get('/api/download', async (req, res) => {
       if (rawUploadMatch) {
         const publicIdWithExt = decodeURIComponent(rawUploadMatch[1]);
 
-        // Split into publicId (no extension) and format (extension)
-        // Cloudinary's private_download_url requires them separately.
-        const lastDot = publicIdWithExt.lastIndexOf('.');
-        const publicId = lastDot !== -1 ? publicIdWithExt.slice(0, lastDot) : publicIdWithExt;
-        const format   = lastDot !== -1 ? publicIdWithExt.slice(lastDot + 1) : '';
+        // For `raw` resources in Cloudinary, the extension is part of the public_id itself.
+        // If we split it off like we do for images, the Admin API will return a 404 Not Found.
+        const publicId = publicIdWithExt;
+        const format = '';
 
         // Generate an Admin API authenticated download URL.
         // This is immune to access_mode and CDN delivery restrictions.
@@ -978,7 +977,7 @@ app.get('/api/download', async (req, res) => {
           attachment: false, // Let our proxy set Content-Disposition
         });
 
-        console.log(`[Download Proxy] Using private_download_url for: ${publicId}.${format}`);
+        console.log(`[Download Proxy] Using private_download_url for: ${publicId}`);
       }
     }
 
