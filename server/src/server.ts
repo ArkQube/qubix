@@ -931,23 +931,44 @@ app.get('/api/download', async (req, res) => {
   }
 
   try {
-    // ── FIX: Use Node's native https for streaming downloads ──────────────
+    // ── FIX: Generate a SIGNED URL for raw resources ──────────────────────
     //
-    // WHY NOT AXIOS?
-    //   axios with `responseType: 'stream'` + `decompress: false` had subtle bugs:
-    //   1. `decompress: false` told axios to NOT decompress, but we'd then forward
-    //      `Content-Encoding: gzip` to the browser — if Cloudinary happened to
-    //      serve uncompressed data for raw resources, the browser would choke.
-    //   2. `validateStatus: () => true` swallowed HTTP errors silently, and with
-    //      streaming, the response body for error pages would still try to pipe.
-    //   3. Redirects: Cloudinary can 301/302 raw resources to a CDN edge;
-    //      axios *usually* handles this, but combined with `decompress: false`
-    //      and streaming, there were edge cases with non-200 responses.
+    // WHY THIS IS NEEDED:
+    //   Cloudinary blocks unsigned access to `raw` resources (PDFs, ZIPs,
+    //   DOCX, etc.) by default — returning 401 Unauthorized.  When we
+    //   switched from resource_type:'auto' to resource_type:'raw' for
+    //   non-media files (to prevent Cloudinary transcoding/corruption),
+    //   their plain URLs stopped working.
     //
-    // Node's native https.get properly follows redirects (we handle them
-    // manually up to 5 hops), streams raw bytes without any transformation,
-    // and gives us precise control over headers.
+    //   Images and videos are fine because Cloudinary allows unsigned
+    //   access to those resource types.
     //
+    // FIX: Detect raw URLs by checking the path for `/raw/upload/`.
+    //   Extract the public ID and use the Cloudinary SDK to generate a
+    //   time-limited signed URL that bypasses the restriction.
+    //
+    let downloadUrl = fileUrl;
+
+    const isRawResource = parsedUrl.pathname.includes('/raw/upload/');
+    if (isRawResource) {
+      // Extract public ID from URL path:
+      //   /raw/upload/v1234567890/arkion-uploads/abc123.pdf
+      //   → arkion-uploads/abc123.pdf
+      const rawUploadMatch = parsedUrl.pathname.match(/\/raw\/upload\/(?:v\d+\/)?(.+)$/);
+      if (rawUploadMatch) {
+        const publicId = decodeURIComponent(rawUploadMatch[1]);
+        // Generate a signed URL valid for 1 hour
+        downloadUrl = cloudinary.url(publicId, {
+          resource_type: 'raw',
+          type: 'upload',
+          sign_url: true,
+          secure: true,
+        });
+        console.log(`[Download Proxy] Signed raw URL for: ${publicId}`);
+      }
+    }
+
+    // ── Stream the file using Node's native https ─────────────────────────
     const fetchStream = (targetUrl: string, redirectCount = 0): void => {
       if (redirectCount > 5) {
         return void res.status(502).json({ error: 'Too many redirects' });
@@ -1004,7 +1025,7 @@ app.get('/api/download', async (req, res) => {
       });
     };
 
-    fetchStream(fileUrl);
+    fetchStream(downloadUrl);
   } catch (err: any) {
     console.error('Proxy download error:', err.message);
     res.status(500).json({ error: 'Failed to download file' });

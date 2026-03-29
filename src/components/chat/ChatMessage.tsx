@@ -70,7 +70,7 @@ export function ChatMessage({ message, currentUser, onDelete }: ChatMessageProps
     if (!message.fileData) return;
 
     try {
-      const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}`;
+      const proxyUrl = `${DEFAULT_CONFIG.apiUrl}/api/download?url=${encodeURIComponent(message.fileData.url)}&name=${encodeURIComponent(message.fileData.fileName)}&publicId=${encodeURIComponent(message.fileData.cloudinaryPublicId || '')}&type=${encodeURIComponent(message.fileData.fileType || '')}`;
 
       // The backend proxy sends "Content-Disposition: attachment", so we can 
       // synchronously trigger the Native Browser Download without async fetching.
