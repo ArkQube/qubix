@@ -9,6 +9,7 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 import { v2 as cloudinary } from 'cloudinary';
 import Redis from 'ioredis';
+import RedisMock from 'ioredis-mock';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import cron from 'node-cron';
@@ -52,19 +53,87 @@ cloudinary.config({
 });
 
 // Initialize Redis
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  password: process.env.REDIS_PASSWORD || undefined,
-  tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
-});
+// Initialize Redis (with automatic in-memory fallback)
+const mockRedis: any = new RedisMock();
+let realRedis: Redis | null = null;
+let isRealRedisReady = false;
 
-redis.on('error', (err) => {
-  console.error('Redis error:', err);
-});
+const redisHost = process.env.REDIS_HOST?.trim();
 
-redis.on('connect', () => {
-  console.log('Connected to Redis');
+if (redisHost && redisHost !== 'localhost') {
+  try {
+    realRedis = new Redis({
+      host: redisHost,
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      password: process.env.REDIS_PASSWORD || undefined,
+      tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+      connectTimeout: 4000,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+      retryStrategy: (times) => {
+        // Try reconnecting in background every 15s without blocking requests
+        return Math.min(times * 3000, 30000);
+      },
+    });
+
+    realRedis.on('ready', () => {
+      console.log(`[Redis] Connected and ready on ${redisHost}`);
+      isRealRedisReady = true;
+    });
+
+    realRedis.on('error', (err) => {
+      if (isRealRedisReady) {
+        console.warn('[Redis] Connection lost:', err.message, '-> Using In-Memory fallback');
+      }
+      isRealRedisReady = false;
+    });
+
+    realRedis.on('close', () => {
+      isRealRedisReady = false;
+    });
+  } catch (err: any) {
+    console.warn('[Redis] Client initialization error:', err.message, '-> Using In-Memory fallback');
+    isRealRedisReady = false;
+  }
+} else {
+  console.log('[Redis] No external Redis configured. Running with high-performance In-Memory store.');
+}
+
+// Resilient Redis Proxy:
+// Routes to real Redis if connected & ready; otherwise seamlessly uses mockRedis in memory.
+// Prevents any offline command hanging when Redis is down or unreachable.
+const redis: Redis = new Proxy({} as any, {
+  get(target, prop: string | symbol) {
+    if (prop === 'on') {
+      return (event: string, cb: (...args: any[]) => void) => {
+        if (realRedis) realRedis.on(event, cb);
+        mockRedis.on(event, cb);
+      };
+    }
+
+    const activeClient = (isRealRedisReady && realRedis) ? realRedis : mockRedis;
+    const value = (activeClient as any)[prop];
+
+    if (typeof value === 'function') {
+      return async (...args: any[]) => {
+        try {
+          return await value.apply(activeClient, args);
+        } catch (err: any) {
+          if (activeClient !== mockRedis) {
+            console.warn(`[Redis Fallback] "${String(prop)}" failed on remote Redis (${err?.message}). Running in-memory.`);
+            isRealRedisReady = false;
+            const fallbackFn = (mockRedis as any)[prop];
+            if (typeof fallbackFn === 'function') {
+              return await fallbackFn.apply(mockRedis, args);
+            }
+          }
+          throw err;
+        }
+      };
+    }
+
+    return value;
+  },
 });
 
 // Initialize WebSocket server
