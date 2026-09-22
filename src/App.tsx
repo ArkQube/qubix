@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { WebSocketProvider, useWebSocket } from '@/contexts/WebSocketContext';
 import { LandingPage } from '@/components/ui/LandingPage';
 import { AppSidebar } from '@/components/ui/AppSidebar';
@@ -15,6 +15,19 @@ function AppContent() {
   const [showLanding, setShowLanding] = useState(false);
   const [activeTab, setActiveTab] = useState('chat');
   const { connected } = useWebSocket();
+
+  // Prevent browser from opening dropped files if dropped outside target areas
+  useEffect(() => {
+    const preventDefaultDrop = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener('dragover', preventDefaultDrop);
+    window.addEventListener('drop', preventDefaultDrop);
+    return () => {
+      window.removeEventListener('dragover', preventDefaultDrop);
+      window.removeEventListener('drop', preventDefaultDrop);
+    };
+  }, []);
 
   const handleEnterChat = () => {
     setShowLanding(false);

@@ -11,7 +11,10 @@ import {
   Clock,
   MessageSquare
 } from 'lucide-react';
-import { getTimeRemaining } from '@/lib/utils';
+import { getTimeRemaining, formatFileSize, validateFileSize } from '@/lib/utils';
+import { DEFAULT_CONFIG } from '@/types';
+import { FileDropOverlay } from './FileDropOverlay';
+import { toast } from 'sonner';
 
 export function ChatContainer() {
   const {
@@ -35,6 +38,60 @@ export function ChatContainer() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+
+  // Drag and Drop State & Counter Ref
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [droppedFile, setDroppedFile] = useState<File | null>(null);
+  const dragCounterRef = useRef(0);
+
+  const processDroppedFiles = (files: FileList | File[]) => {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
+      toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
+      return;
+    }
+    setDroppedFile(file);
+    toast.success(`Attached "${file.name}" • Click Send or press Enter to share`);
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      dragCounterRef.current += 1;
+      setIsDraggingFile(true);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDraggingFile(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDraggingFile(false);
+
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      processDroppedFiles(e.dataTransfer.files);
+    }
+  };
 
   // WhatsApp-Style auto-scroll
   const scrollToBottom = () => {
@@ -72,7 +129,24 @@ export function ChatContainer() {
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
+    <div
+      className="flex-1 flex flex-col h-full min-h-0 overflow-hidden relative"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag & Drop Visual Overlay */}
+      <FileDropOverlay
+        isVisible={isDraggingFile}
+        targetName={currentRoom ? (currentRoom.name || `Room ${currentRoom.code}`) : 'Global Chat'}
+        onDrop={processDroppedFiles}
+        onClose={() => {
+          dragCounterRef.current = 0;
+          setIsDraggingFile(false);
+        }}
+      />
+
       {/* Room Manager */}
       <RoomManager
         currentRoom={currentRoom}
@@ -162,6 +236,8 @@ export function ChatContainer() {
         onUploadFile={uploadFile}
         uploadProgress={uploadProgress}
         disabled={!connected}
+        droppedFile={droppedFile}
+        onClearDroppedFile={() => setDroppedFile(null)}
       />
     </div>
   );

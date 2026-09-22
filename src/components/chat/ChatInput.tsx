@@ -16,17 +16,28 @@ import { DEFAULT_CONFIG } from '@/types';
 import imageCompression from 'browser-image-compression';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { useImageCompression } from '@/hooks/useImageCompression';
+import { toast } from 'sonner';
 
 interface ChatInputProps {
   onSendMessage: (content: string, fileData?: any, ghostId?: string) => void;
   onUploadFile: (file: File, uploadId?: string) => Promise<any>;
   uploadProgress: { progress: number; status: string; error?: string } | null;
   disabled?: boolean;
+  droppedFile?: File | null;
+  onClearDroppedFile?: () => void;
 }
 
-export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disabled }: ChatInputProps) {
+export function ChatInput({
+  onSendMessage,
+  onUploadFile,
+  uploadProgress,
+  disabled,
+  droppedFile,
+  onClearDroppedFile,
+}: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -34,6 +45,60 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const pickerOpenRef = useRef(false);
   const { pausePing, resumePing, sendSuspend, sendResume, forceReconnect, suppressDisconnectUI } = useWebSocket();
   const { compressImages } = useImageCompression();
+
+  // Preview URL for staged images
+  useEffect(() => {
+    if (selectedFile && selectedFile.type.startsWith('image/')) {
+      const url = URL.createObjectURL(selectedFile);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    } else {
+      setPreviewUrl(null);
+    }
+  }, [selectedFile]);
+
+  // Sync dropped file from parent container (drag & drop)
+  useEffect(() => {
+    if (droppedFile) {
+      if (!validateFileSize(droppedFile, DEFAULT_CONFIG.maxFileSize)) {
+        toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
+        onClearDroppedFile?.();
+        return;
+      }
+      setSelectedFile(droppedFile);
+      onClearDroppedFile?.();
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  }, [droppedFile, onClearDroppedFile]);
+
+  // Clipboard Paste support (e.g. Ctrl+V screenshots or copied files)
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
+            toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
+            return;
+          }
+          let finalFile = file;
+          if (!file.name || file.name === 'image.png') {
+            const ext = file.type.split('/')[1] || 'png';
+            finalFile = new File([file], `Screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`, { type: file.type });
+          }
+          setSelectedFile(finalFile);
+          toast.success(`Attached "${finalFile.name}" from clipboard`);
+          setTimeout(() => textareaRef.current?.focus(), 50);
+          break;
+        }
+      }
+    }
+  }, []);
 
   // Recording State
   const [isRecording, setIsRecording] = useState(false);
@@ -184,19 +249,23 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
     if (!file) return;
 
     if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
-      alert(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
+      toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
       return;
     }
 
     setSelectedFile(file);
+    toast.success(`Attached "${file.name}"`);
+    setTimeout(() => textareaRef.current?.focus(), 50);
   }, [resumePing, forceReconnect]);
 
   const handleRemoveFile = useCallback(() => {
     setSelectedFile(null);
+    setPreviewUrl(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, []);
+    onClearDroppedFile?.();
+  }, [onClearDroppedFile]);
 
   const startRecording = async () => {
     try {
@@ -267,33 +336,82 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
   const isDisabled = disabled || isUploading || (!message.trim() && !selectedFile);
 
   return (
-    <div className="border-t bg-background p-4">
+    <div
+      className="border-t bg-background p-4"
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+        }
+      }}
+      onDrop={(e) => {
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault();
+          e.stopPropagation();
+          const files = e.dataTransfer.files;
+          if (files && files.length > 0) {
+            const file = files[0];
+            if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
+              toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
+              return;
+            }
+            setSelectedFile(file);
+            toast.success(`Attached "${file.name}"`);
+            setTimeout(() => textareaRef.current?.focus(), 50);
+          }
+        }
+      }}
+    >
       {/* Selected File Preview */}
       {selectedFile && (
-        <div className="mb-3 flex items-center gap-3 p-3 bg-muted rounded-lg">
-          <div className="w-10 h-10 rounded-lg bg-background flex items-center justify-center">
-            <FileIcon className="w-5 h-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">{selectedFile.name}</p>
-            <p className="text-xs text-muted-foreground">
-              {formatFileSize(selectedFile.size)}
-            </p>
-          </div>
-          {isUploading ? (
-            <div className="flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span className="text-xs">Uploading...</span>
+        <div className="mb-3 flex items-center gap-3 p-3 bg-muted/70 border rounded-xl animate-in fade-in slide-in-from-bottom-2 duration-150">
+          {previewUrl ? (
+            <div className="relative w-12 h-12 rounded-lg overflow-hidden border bg-background shrink-0 shadow-sm">
+              <img src={previewUrl} alt="Preview" className="w-full h-full object-cover" />
             </div>
           ) : (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={handleRemoveFile}
-            >
-              <X className="w-4 h-4" />
-            </Button>
+            <div className="w-12 h-12 rounded-lg bg-background border flex items-center justify-center shrink-0 shadow-sm text-primary">
+              <FileIcon className="w-6 h-6" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">{selectedFile.name}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-xs text-muted-foreground">
+                {formatFileSize(selectedFile.size)}
+              </span>
+              <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-background border text-muted-foreground">
+                Ready to send
+              </span>
+            </div>
+          </div>
+          {isUploading ? (
+            <div className="flex items-center gap-2 pr-2">
+              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+              <span className="text-xs font-medium">Uploading...</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button
+                size="sm"
+                className="h-8 px-3 text-xs gap-1.5 font-medium shadow-sm"
+                onClick={handleSend}
+                disabled={disabled || isUploading}
+                title="Send file now"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Send</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                onClick={handleRemoveFile}
+                title="Remove file"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
           )}
         </div>
       )}
@@ -334,7 +452,8 @@ export function ChatInput({ onSendMessage, onUploadFile, uploadProgress, disable
               value={message}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
+              onPaste={handlePaste}
+              placeholder="Type a message or drag & drop files..."
               className="min-h-[44px] max-h-[120px] resize-none py-3 border-0 focus-visible:ring-0 shadow-none"
               disabled={disabled || isUploading || isRecording}
               rows={1}
