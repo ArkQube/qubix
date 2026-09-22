@@ -337,7 +337,7 @@ export function ChatInput({
 
   return (
     <div
-      className="border-t bg-background p-4"
+      className="border-t bg-background p-2.5 sm:p-4"
       onDragOver={(e) => {
         if (e.dataTransfer?.types?.includes('Files')) {
           e.preventDefault();
@@ -364,23 +364,23 @@ export function ChatInput({
     >
       {/* Selected File Preview */}
       {selectedFile && (
-        <div className="mb-3 flex items-center gap-3 p-3 bg-muted/70 border rounded-xl animate-in fade-in slide-in-from-bottom-2 duration-150">
+        <div className="mb-2.5 flex items-center gap-2.5 p-2 sm:p-2.5 bg-muted/80 border rounded-xl animate-in fade-in slide-in-from-bottom-2 duration-150">
           {previewUrl ? (
-            <div className="relative w-12 h-12 rounded-lg overflow-hidden border bg-background shrink-0 shadow-sm">
+            <div className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-lg overflow-hidden border bg-background shrink-0 shadow-sm">
               <img src={previewUrl} alt="Preview" className="w-full h-full object-cover" />
             </div>
           ) : (
-            <div className="w-12 h-12 rounded-lg bg-background border flex items-center justify-center shrink-0 shadow-sm text-primary">
-              <FileIcon className="w-6 h-6" />
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg bg-background border flex items-center justify-center shrink-0 shadow-sm text-primary">
+              <FileIcon className="w-5 h-5" />
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">{selectedFile.name}</p>
+            <p className="text-xs sm:text-sm font-medium truncate">{selectedFile.name}</p>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-xs text-muted-foreground">
+              <span className="text-[11px] sm:text-xs text-muted-foreground">
                 {formatFileSize(selectedFile.size)}
               </span>
-              <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-background border text-muted-foreground">
+              <span className="text-[9px] sm:text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.2 rounded bg-background border text-muted-foreground">
                 Ready to send
               </span>
             </div>
@@ -391,27 +391,15 @@ export function ChatInput({
               <span className="text-xs font-medium">Uploading...</span>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 shrink-0">
-              <Button
-                size="sm"
-                className="h-8 px-3 text-xs gap-1.5 font-medium shadow-sm"
-                onClick={handleSend}
-                disabled={disabled || isUploading}
-                title="Send file now"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>Send</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                onClick={handleRemoveFile}
-                title="Remove file"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0"
+              onClick={handleRemoveFile}
+              title="Remove file"
+            >
+              <X className="w-4 h-4" />
+            </Button>
           )}
         </div>
       )}
@@ -437,9 +425,9 @@ export function ChatInput({
         />
 
         {/* Message Input or Recording UI */}
-        <div className="flex-1 relative border rounded-md bg-background flex items-center shadow-sm">
+        <div className="flex-1 relative border rounded-md bg-background flex items-center shadow-sm overflow-hidden">
           {isRecording ? (
-            <div className="flex-1 min-h-[44px] flex items-center justify-between px-4 animate-in fade-in zoom-in duration-200">
+            <div className="flex-1 min-h-[40px] flex items-center justify-between px-3 animate-in fade-in zoom-in duration-200">
               <div className="flex items-center gap-3 text-destructive">
                 <div className="w-2.5 h-2.5 rounded-full bg-destructive animate-pulse" />
                 <span className="font-mono text-sm tracking-widest">{new Date(recordingTime * 1000).toISOString().substring(14, 19)}</span>
@@ -453,8 +441,8 @@ export function ChatInput({
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder="Type a message or drag & drop files..."
-              className="min-h-[44px] max-h-[120px] resize-none py-3 border-0 focus-visible:ring-0 shadow-none"
+              placeholder="Type a message..."
+              className="min-h-[40px] max-h-[120px] resize-none py-2 px-3 border-0 focus-visible:ring-0 shadow-none text-sm leading-snug"
               disabled={disabled || isUploading || isRecording}
               rows={1}
             />
