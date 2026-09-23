@@ -67,9 +67,14 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   //
   const currentRoomRef = useRef<Room | null>(null);
   const currentRoomPinRef = useRef<string | undefined>(undefined);
+  const currentUserRef = useRef<User | null>(null);
   useEffect(() => {
     currentRoomRef.current = currentRoom;
   }, [currentRoom]);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
 
   // Store session ID
   useEffect(() => {
@@ -104,6 +109,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     switch (type) {
       case 'auth_success':
         setCurrentUser(payload.user);
+        currentUserRef.current = payload.user;
+        setError(null); // Wipe out any transient handshake errors
         localStorage.setItem('arkion_username', payload.user.username);
         // If the user was in a private room but their socket dropped, automatically pull them back in
         if (currentRoomRef.current) {
@@ -240,6 +247,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         break;
 
       case 'error':
+        if (payload.error === 'Not authenticated' && currentUserRef.current) {
+          console.warn('[WS] Suppressed transient unauthenticated packet during handshake');
+          break;
+        }
         setError(payload.error);
         setTimeout(() => setError(null), 5000);
         break;

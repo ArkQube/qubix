@@ -224,9 +224,9 @@ export function ChatContainer() {
       </div>
 
       {/* Error Toast */}
-      {error && (
-        <div className="bg-destructive text-destructive-foreground px-4 py-2 text-sm">
-          {error}
+      {error && !(error === 'Not authenticated' && currentUser) && (
+        <div className="bg-destructive text-destructive-foreground px-4 py-2 text-sm flex items-center justify-between animate-in fade-in duration-150">
+          <span>{error}</span>
         </div>
       )}
 

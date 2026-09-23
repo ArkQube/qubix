@@ -859,6 +859,25 @@ wss.on('connection', (ws: any) => {
         return;
       }
 
+      // Heartbeat & connection signals do NOT require user authentication
+      if (type === WS_MESSAGE_TYPES.PING) {
+        const handler = messageHandlers.get(type);
+        if (handler) await handler(ws, '', payload);
+        return;
+      }
+
+      if (type === WS_MESSAGE_TYPES.SUSPEND) {
+        const handler = messageHandlers.get(type);
+        if (handler) await handler(ws, '', payload);
+        return;
+      }
+
+      if (type === WS_MESSAGE_TYPES.RESUME) {
+        const handler = messageHandlers.get(type);
+        if (handler) await handler(ws, '', payload);
+        return;
+      }
+
       if (!userId || !users.has(userId)) {
         sendError(ws, 'Not authenticated');
         return;
