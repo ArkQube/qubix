@@ -9,7 +9,8 @@ import {
   Loader2,
   Mic,
   Square,
-  Trash2
+  Trash2,
+  Plus
 } from 'lucide-react';
 import { formatFileSize, validateFileSize } from '@/lib/utils';
 import { DEFAULT_CONFIG } from '@/types';
@@ -18,11 +19,15 @@ import { useWebSocket } from '@/contexts/WebSocketContext';
 import { useImageCompression } from '@/hooks/useImageCompression';
 import { toast } from 'sonner';
 
+const MAX_FILES = 5;
+
 interface ChatInputProps {
   onSendMessage: (content: string, fileData?: any, ghostId?: string) => void;
   onUploadFile: (file: File, uploadId?: string) => Promise<any>;
-  uploadProgress: { progress: number; status: string; error?: string } | null;
+  uploadProgress: { fileId?: string; progress: number; status: string; error?: string } | null;
   disabled?: boolean;
+  droppedFiles?: File[] | null;
+  onClearDroppedFiles?: () => void;
   droppedFile?: File | null;
   onClearDroppedFile?: () => void;
 }
@@ -32,13 +37,16 @@ export function ChatInput({
   onUploadFile,
   uploadProgress,
   disabled,
+  droppedFiles,
+  onClearDroppedFiles,
   droppedFile,
   onClearDroppedFile,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatusText, setUploadStatusText] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeUploads = useRef(new Set<string>());
@@ -46,59 +54,104 @@ export function ChatInput({
   const { pausePing, resumePing, sendSuspend, sendResume, forceReconnect, suppressDisconnectUI } = useWebSocket();
   const { compressImages } = useImageCompression();
 
-  // Preview URL for staged images
+  // Preview URLs for staged images (cleaned up automatically when files change/unmount)
   useEffect(() => {
-    if (selectedFile && selectedFile.type.startsWith('image/')) {
-      const url = URL.createObjectURL(selectedFile);
-      setPreviewUrl(url);
-      return () => URL.revokeObjectURL(url);
-    } else {
-      setPreviewUrl(null);
-    }
-  }, [selectedFile]);
+    const urls: Record<string, string> = {};
+    selectedFiles.forEach((file, index) => {
+      if (file.type.startsWith('image/')) {
+        urls[`${file.name}-${file.size}-${index}`] = URL.createObjectURL(file);
+      }
+    });
+    setPreviewUrls(urls);
 
-  // Sync dropped file from parent container (drag & drop)
+    return () => {
+      Object.values(urls).forEach(url => URL.revokeObjectURL(url));
+    };
+  }, [selectedFiles]);
+
+  const addFiles = useCallback((incomingFiles: FileList | File[]) => {
+    const filesArray = Array.from(incomingFiles);
+    if (filesArray.length === 0) return;
+
+    setSelectedFiles((prev) => {
+      const currentCount = prev.length;
+      const availableSlots = MAX_FILES - currentCount;
+
+      if (availableSlots <= 0) {
+        toast.warning(`Maximum ${MAX_FILES} files can be attached at once`);
+        return prev;
+      }
+
+      let filesToAdd = filesArray;
+      if (filesArray.length > availableSlots) {
+        toast.warning(`Maximum ${MAX_FILES} files allowed. Adding first ${availableSlots} file${availableSlots > 1 ? 's' : ''}.`);
+        filesToAdd = filesArray.slice(0, availableSlots);
+      }
+
+      const validFiles: File[] = [];
+      for (const file of filesToAdd) {
+        if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
+          toast.error(`"${file.name}" exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
+        } else {
+          validFiles.push(file);
+        }
+      }
+
+      if (validFiles.length > 0) {
+        toast.success(`Attached ${validFiles.length} file${validFiles.length > 1 ? 's' : ''}`);
+      }
+
+      return [...prev, ...validFiles];
+    });
+
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  }, []);
+
+  // Sync dropped files from parent container (drag & drop)
+  useEffect(() => {
+    if (droppedFiles && droppedFiles.length > 0) {
+      addFiles(droppedFiles);
+      onClearDroppedFiles?.();
+    }
+  }, [droppedFiles, addFiles, onClearDroppedFiles]);
+
   useEffect(() => {
     if (droppedFile) {
-      if (!validateFileSize(droppedFile, DEFAULT_CONFIG.maxFileSize)) {
-        toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
-        onClearDroppedFile?.();
-        return;
-      }
-      setSelectedFile(droppedFile);
+      addFiles([droppedFile]);
       onClearDroppedFile?.();
-      setTimeout(() => textareaRef.current?.focus(), 50);
     }
-  }, [droppedFile, onClearDroppedFile]);
+  }, [droppedFile, addFiles, onClearDroppedFile]);
 
   // Clipboard Paste support (e.g. Ctrl+V screenshots or copied files)
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
 
+    const filesToPaste: File[] = [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (item.kind === 'file') {
         const file = item.getAsFile();
         if (file) {
-          e.preventDefault();
-          if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
-            toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
-            return;
-          }
           let finalFile = file;
           if (!file.name || file.name === 'image.png') {
             const ext = file.type.split('/')[1] || 'png';
-            finalFile = new File([file], `Screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`, { type: file.type });
+            finalFile = new File(
+              [file],
+              `Screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}-${i + 1}.${ext}`,
+              { type: file.type }
+            );
           }
-          setSelectedFile(finalFile);
-          toast.success(`Attached "${finalFile.name}" from clipboard`);
-          setTimeout(() => textareaRef.current?.focus(), 50);
-          break;
+          filesToPaste.push(finalFile);
         }
       }
     }
-  }, []);
+
+    if (filesToPaste.length > 0) {
+      e.preventDefault();
+      addFiles(filesToPaste);
+    }
+  }, [addFiles]);
 
   // Recording State
   const [isRecording, setIsRecording] = useState(false);
@@ -108,30 +161,39 @@ export function ChatInput({
   const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const handleSend = useCallback(async () => {
-    if (!message.trim() && !selectedFile) return;
+    if (!message.trim() && selectedFiles.length === 0) return;
 
-    const currentMessage = message;
-    const currentFile = selectedFile;
+    const currentMessage = message.trim();
+    const filesToSend = [...selectedFiles];
     
     // Clear input state immediately for instant UX perception
     setMessage('');
-    setSelectedFile(null);
+    setSelectedFiles([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
 
-    let fileData = null;
-    let uploadId = undefined;
+    if (filesToSend.length === 0) {
+      onSendMessage(currentMessage);
+      return;
+    }
 
-    // ─── 1. Core Upload Compression & UUID Pipeline ───────────────────────────
-    if (currentFile) {
-      uploadId = crypto.randomUUID();
-      
-      // Strict Deduplication — physically prevents 2x button taps generating 2 messages
-      if (activeUploads.current.has(uploadId)) return; 
+    // ─── 1. Core Upload Compression & Multi-File Pipeline ───────────────────────
+    setIsUploading(true);
+    let messageAttached = false;
+
+    for (let i = 0; i < filesToSend.length; i++) {
+      const currentFile = filesToSend[i];
+      const uploadId = crypto.randomUUID();
+
+      if (activeUploads.current.has(uploadId)) continue;
       activeUploads.current.add(uploadId);
 
-      setIsUploading(true);
+      setUploadStatusText(
+        filesToSend.length > 1
+          ? `Uploading file ${i + 1} of ${filesToSend.length}: "${currentFile.name}"...`
+          : `Uploading "${currentFile.name}"...`
+      );
 
       try {
         let fileToUpload = currentFile;
@@ -153,21 +215,29 @@ export function ChatInput({
           }
         }
         
-        fileData = await onUploadFile(fileToUpload, uploadId);
-      } catch (err) {
-        console.error('File upload failed inside HTTP stream:', err);
+        const fileData = await onUploadFile(fileToUpload, uploadId);
+
+        if (fileData) {
+          const caption = !messageAttached ? currentMessage : '';
+          onSendMessage(caption, fileData, uploadId);
+          messageAttached = true;
+        }
+      } catch (err: any) {
+        console.error(`File upload failed for "${currentFile.name}":`, err);
+        toast.error(`Failed to upload "${currentFile.name}"`);
       } finally {
         activeUploads.current.delete(uploadId);
-        setIsUploading(false);
       }
-      
-      // If the compression or Cloudinary HTTP proxy failed, abruptly abort the WS broadcast
-      if (!fileData) return; 
     }
 
-    // ─── 2. Final Message Broadcast ───────────────────────────────────────────
-    onSendMessage(currentMessage, fileData, uploadId);
-  }, [message, selectedFile, onSendMessage, onUploadFile]);
+    // If text message wasn't attached because all file uploads failed, send text message alone
+    if (!messageAttached && currentMessage) {
+      onSendMessage(currentMessage);
+    }
+
+    setIsUploading(false);
+    setUploadStatusText(null);
+  }, [message, selectedFiles, compressImages, onSendMessage, onUploadFile]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -192,25 +262,10 @@ export function ChatInput({
   }, [pausePing, sendSuspend, suppressDisconnectUI]);
 
   // ─── ANDROID FIX: Window focus recovery ──────────────────────────────────
-  // PROBLEM 1 — Spurious focus: On some Android devices, calling
-  //   `input.click()` causes the browser to briefly blur/refocus the window
-  //   BEFORE the native picker appears. If we reconnect here, we kill the
-  //   connection while the user hasn't even seen the picker yet.
-  //
-  // PROBLEM 2 — focus-before-change race: When the user picks a file and
-  //   the picker closes, `focus` fires BEFORE the input's `change` event.
-  //   If we `forceReconnect()` immediately, React disables the input and the
-  //   `change` event never fires, dropping the file.
-  //
-  // FIX: Ignore focus events that arrive < 2 seconds after opening the
-  // picker (these are spurious). For real returns, wait 300ms to let
-  // `change` fire first. If `change` handles it, it cancels this timeout.
   useEffect(() => {
     const handleWindowFocus = () => {
       if (!pickerOpenRef.current) return;
 
-      // Guard: If the picker was opened < 2s ago, this is a spurious
-      // Android focus event — the native picker hasn't even appeared yet.
       const elapsed = Date.now() - pickerOpenedAtRef.current;
       if (elapsed < 2000) {
         console.log(`[ChatInput] Ignoring spurious focus event (${elapsed}ms after open)`);
@@ -231,41 +286,37 @@ export function ChatInput({
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
-  }, [resumePing, forceReconnect]);
+  }, [resumePing, sendResume, forceReconnect, suppressDisconnectUI]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
     
-    // We captured the file! 
-    // Do NOT force reconnect here. If Android actually killed the socket,
-    // the natural `ws.onclose` event will trigger our silent recovery.
-    // If we force it here, we might kill a perfectly healthy connection.
     pickerOpenRef.current = false;
     suppressDisconnectUI.current = false;
     resumePing();
     sendResume(); // Tell server to resume heartbeat checks
     
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
-      toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
-      return;
+    if (e.target.files && e.target.files.length > 0) {
+      addFiles(e.target.files);
     }
+    e.target.value = '';
+  }, [addFiles, resumePing, sendResume, suppressDisconnectUI]);
 
-    setSelectedFile(file);
-    toast.success(`Attached "${file.name}"`);
-    setTimeout(() => textareaRef.current?.focus(), 50);
-  }, [resumePing, forceReconnect]);
-
-  const handleRemoveFile = useCallback(() => {
-    setSelectedFile(null);
-    setPreviewUrl(null);
+  const handleRemoveFile = useCallback((indexToRemove: number) => {
+    setSelectedFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+  }, []);
+
+  const handleClearAllFiles = useCallback(() => {
+    setSelectedFiles([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    onClearDroppedFiles?.();
     onClearDroppedFile?.();
-  }, [onClearDroppedFile]);
+  }, [onClearDroppedFiles, onClearDroppedFile]);
 
   const startRecording = async () => {
     try {
@@ -283,7 +334,7 @@ export function ChatInput({
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const audioFile = new File([audioBlob], `Voice-Note-${new Date().toLocaleTimeString().replace(/:/g,'-')}.webm`, { type: 'audio/webm' });
-        setSelectedFile(audioFile);
+        addFiles([audioFile]);
         audioChunksRef.current = [];
       };
 
@@ -333,7 +384,7 @@ export function ChatInput({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
   }, []);
 
-  const isDisabled = disabled || isUploading || (!message.trim() && !selectedFile);
+  const isDisabled = disabled || isUploading || (!message.trim() && selectedFiles.length === 0);
 
   return (
     <div
@@ -350,24 +401,21 @@ export function ChatInput({
           e.stopPropagation();
           const files = e.dataTransfer.files;
           if (files && files.length > 0) {
-            const file = files[0];
-            if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
-              toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
-              return;
-            }
-            setSelectedFile(file);
-            toast.success(`Attached "${file.name}"`);
-            setTimeout(() => textareaRef.current?.focus(), 50);
+            addFiles(files);
           }
         }
       }}
     >
-      {/* Selected File Preview */}
-      {selectedFile && (
+      {/* Single File Staging Preview */}
+      {selectedFiles.length === 1 && (
         <div className="mb-2.5 flex items-center gap-2.5 p-2 sm:p-2.5 bg-muted/80 border rounded-xl animate-in fade-in slide-in-from-bottom-2 duration-150">
-          {previewUrl ? (
+          {previewUrls[`${selectedFiles[0].name}-${selectedFiles[0].size}-0`] ? (
             <div className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-lg overflow-hidden border bg-background shrink-0 shadow-sm">
-              <img src={previewUrl} alt="Preview" className="w-full h-full object-cover" />
+              <img
+                src={previewUrls[`${selectedFiles[0].name}-${selectedFiles[0].size}-0`]}
+                alt={selectedFiles[0].name}
+                className="w-full h-full object-cover"
+              />
             </div>
           ) : (
             <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg bg-background border flex items-center justify-center shrink-0 shadow-sm text-primary">
@@ -375,13 +423,13 @@ export function ChatInput({
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <p className="text-xs sm:text-sm font-medium truncate">{selectedFile.name}</p>
+            <p className="text-xs sm:text-sm font-medium truncate">{selectedFiles[0].name}</p>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-[11px] sm:text-xs text-muted-foreground">
-                {formatFileSize(selectedFile.size)}
+                {formatFileSize(selectedFiles[0].size)}
               </span>
-              <span className="text-[9px] sm:text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.2 rounded bg-background border text-muted-foreground">
-                Ready to send
+              <span className="text-[9px] sm:text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-background border text-muted-foreground">
+                1 of {MAX_FILES} attached
               </span>
             </div>
           </div>
@@ -395,12 +443,89 @@ export function ChatInput({
               variant="ghost"
               size="icon"
               className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0"
-              onClick={handleRemoveFile}
+              onClick={() => handleRemoveFile(0)}
               title="Remove file"
             >
               <X className="w-4 h-4" />
             </Button>
           )}
+        </div>
+      )}
+
+      {/* Multiple Files Staging Preview (2 to 5 files) */}
+      {selectedFiles.length > 1 && (
+        <div className="mb-2.5 space-y-1.5 animate-in fade-in slide-in-from-bottom-2 duration-150">
+          <div className="flex items-center justify-between px-1 text-xs">
+            <span className="font-semibold text-foreground flex items-center gap-1.5">
+              <span>Attached files</span>
+              <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-bold">
+                {selectedFiles.length}/{MAX_FILES}
+              </span>
+            </span>
+            {!isUploading && (
+              <button
+                type="button"
+                onClick={handleClearAllFiles}
+                className="text-[11px] text-muted-foreground hover:text-destructive transition-colors font-medium hover:underline"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+
+          {/* Horizontal scrollable row of compact chips */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1.5 pt-0.5 px-0.5 scrollbar-thin">
+            {selectedFiles.map((file, idx) => {
+              const previewUrl = previewUrls[`${file.name}-${file.size}-${idx}`];
+              return (
+                <div
+                  key={`${file.name}-${file.size}-${idx}`}
+                  className="flex items-center gap-2 p-1.5 pr-2 bg-muted/80 border rounded-xl shrink-0 max-w-[170px] sm:max-w-[200px] shadow-sm relative group"
+                >
+                  {previewUrl ? (
+                    <div className="relative w-9 h-9 rounded-lg overflow-hidden border bg-background shrink-0">
+                      <img src={previewUrl} alt={file.name} className="w-full h-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="w-9 h-9 rounded-lg bg-background border flex items-center justify-center shrink-0 text-primary">
+                      <FileIcon className="w-4 h-4" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate" title={file.name}>
+                      {file.name}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {formatFileSize(file.size)}
+                    </p>
+                  </div>
+                  {!isUploading && (
+                    <button
+                      type="button"
+                      className="h-5 w-5 rounded-full flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0"
+                      onClick={() => handleRemoveFile(idx)}
+                      title="Remove file"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Add more button if slots remaining */}
+            {selectedFiles.length < MAX_FILES && !isUploading && (
+              <button
+                type="button"
+                onClick={openFilePicker}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-dashed rounded-xl bg-background/50 hover:bg-muted/60 text-muted-foreground hover:text-foreground text-xs font-medium shrink-0 transition-colors h-11"
+                title={`Add more files (${MAX_FILES - selectedFiles.length} slots left)`}
+              >
+                <Plus className="w-3.5 h-3.5 text-primary" />
+                <span>Add ({MAX_FILES - selectedFiles.length} left)</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -412,13 +537,19 @@ export function ChatInput({
           size="icon"
           className="flex-shrink-0 h-10 w-10"
           onClick={openFilePicker}
-          disabled={disabled || isUploading || !!selectedFile}
+          disabled={disabled || isUploading || selectedFiles.length >= MAX_FILES}
+          title={
+            selectedFiles.length >= MAX_FILES
+              ? `Maximum ${MAX_FILES} files reached`
+              : `Attach files (up to ${MAX_FILES})`
+          }
         >
           <Paperclip className="w-5 h-5" />
         </Button>
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           className="hidden"
           onChange={handleFileSelect}
           accept="*/*"
@@ -470,7 +601,7 @@ export function ChatInput({
               <Square className="w-4 h-4 fill-current" />
             </Button>
           </>
-        ) : (!message.trim() && !selectedFile) ? (
+        ) : (!message.trim() && selectedFiles.length === 0) ? (
           <Button
             variant="secondary"
             className="flex-shrink-0 h-10 w-10"
@@ -495,11 +626,14 @@ export function ChatInput({
         )}
       </div>
 
-      {/* Upload Progress */}
-      {uploadProgress && uploadProgress.status === 'uploading' && (
-        <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="w-3 h-3 animate-spin" />
-          <span>Uploading... {uploadProgress.progress}%</span>
+      {/* Upload Progress Status */}
+      {isUploading && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-primary font-medium animate-pulse">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          <span>
+            {uploadStatusText || 'Uploading...'}
+            {uploadProgress && uploadProgress.status === 'uploading' ? ` (${uploadProgress.progress}%)` : ''}
+          </span>
         </div>
       )}
 

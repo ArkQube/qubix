@@ -11,10 +11,8 @@ import {
   Clock,
   MessageSquare
 } from 'lucide-react';
-import { getTimeRemaining, formatFileSize, validateFileSize } from '@/lib/utils';
-import { DEFAULT_CONFIG } from '@/types';
+import { getTimeRemaining } from '@/lib/utils';
 import { FileDropOverlay } from './FileDropOverlay';
-import { toast } from 'sonner';
 
 export function ChatContainer() {
   const {
@@ -41,18 +39,13 @@ export function ChatContainer() {
 
   // Drag and Drop State & Counter Ref
   const [isDraggingFile, setIsDraggingFile] = useState(false);
-  const [droppedFile, setDroppedFile] = useState<File | null>(null);
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
   const dragCounterRef = useRef(0);
 
   const processDroppedFiles = (files: FileList | File[]) => {
     if (!files || files.length === 0) return;
-    const file = files[0];
-    if (!validateFileSize(file, DEFAULT_CONFIG.maxFileSize)) {
-      toast.error(`File size exceeds ${formatFileSize(DEFAULT_CONFIG.maxFileSize)} limit`);
-      return;
-    }
-    setDroppedFile(file);
-    toast.success(`Attached "${file.name}" • Click Send or press Enter to share`);
+    const fileList = Array.from(files);
+    setDroppedFiles(fileList);
   };
 
   const handleDragEnter = (e: React.DragEvent) => {
@@ -236,8 +229,8 @@ export function ChatContainer() {
         onUploadFile={uploadFile}
         uploadProgress={uploadProgress}
         disabled={!connected}
-        droppedFile={droppedFile}
-        onClearDroppedFile={() => setDroppedFile(null)}
+        droppedFiles={droppedFiles}
+        onClearDroppedFiles={() => setDroppedFiles(null)}
       />
     </div>
   );

@@ -68,7 +68,7 @@ export function FileDropOverlay({ isVisible, targetName, onDrop, onClose }: File
 
             {/* Main Text */}
             <h3 className="text-xl font-bold tracking-tight text-foreground mb-1">
-              Drop file to share
+              Drop files to share
             </h3>
             <p className="text-sm text-muted-foreground mb-4">
               Sending to <span className="font-semibold text-foreground">{targetName || 'Chat'}</span>
@@ -77,7 +77,7 @@ export function FileDropOverlay({ isVisible, targetName, onDrop, onClose }: File
             {/* File info pill */}
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-background/80 border text-xs font-medium text-muted-foreground shadow-sm">
               <FileType className="w-3.5 h-3.5 text-primary" />
-              <span>Max size {formatFileSize(DEFAULT_CONFIG.maxFileSize)} • Images, Documents, Audio, Video</span>
+              <span>Up to 5 files • Max {formatFileSize(DEFAULT_CONFIG.maxFileSize)} each</span>
             </div>
           </div>
         </motion.div>
