@@ -50,8 +50,22 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   // Helper to load persisted room on boot/refresh
   const getInitialRoom = (): { room: Room | null; pin?: string } => {
     try {
-      const stored = sessionStorage.getItem('arkion_current_room');
-      if (stored) return JSON.parse(stored);
+      let stored = localStorage.getItem('arkion_current_room');
+      if (!stored) {
+        stored = sessionStorage.getItem('arkion_current_room');
+        if (stored) {
+          localStorage.setItem('arkion_current_room', stored);
+          sessionStorage.removeItem('arkion_current_room');
+        }
+      }
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.room?.expiresAt && Date.now() > parsed.room.expiresAt) {
+          localStorage.removeItem('arkion_current_room');
+          return { room: null };
+        }
+        return parsed;
+      }
     } catch {}
     return { room: null };
   };
@@ -128,13 +142,23 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     const { type, payload } = data;
 
     switch (type) {
-      case 'auth_success':
+      case 'auth_success': {
         setCurrentUser(payload.user);
         currentUserRef.current = payload.user;
         setError(null); // Wipe out any transient handshake errors
         localStorage.setItem('arkion_username', payload.user.username);
-        // If the user was in a private room but their socket dropped, automatically pull them back in
-        if (currentRoomRef.current) {
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlRoomCode = urlParams.get('room');
+        if (urlRoomCode && (!currentRoomRef.current || currentRoomRef.current.code !== urlRoomCode.toUpperCase())) {
+          sendRaw({
+            type: 'join_room',
+            payload: {
+              code: urlRoomCode.toUpperCase(),
+            },
+          });
+        } else if (currentRoomRef.current) {
+          // If the user was in a private room but reopened tab or socket dropped, automatically pull them back in
           sendRaw({
             type: 'join_room',
             payload: {
@@ -145,6 +169,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         }
         flushPendingMessages();
         break;
+      }
 
       case 'auth_error':
         setError(payload.error);
@@ -244,7 +269,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       case 'room_created':
         currentRoomRef.current = payload.room;
         try {
-          sessionStorage.setItem('arkion_current_room', JSON.stringify({
+          localStorage.setItem('arkion_current_room', JSON.stringify({
             room: payload.room,
             pin: currentRoomPinRef.current
           }));
@@ -258,7 +283,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       case 'room_joined':
         currentRoomRef.current = payload.room;
         try {
-          sessionStorage.setItem('arkion_current_room', JSON.stringify({
+          localStorage.setItem('arkion_current_room', JSON.stringify({
             room: payload.room,
             pin: currentRoomPinRef.current
           }));
@@ -273,6 +298,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       case 'room_left':
         currentRoomRef.current = null;
         currentRoomPinRef.current = undefined;
+        try { localStorage.removeItem('arkion_current_room'); } catch {}
         try { sessionStorage.removeItem('arkion_current_room'); } catch {}
         setCurrentRoom(null);
         setMessages([]);
@@ -282,6 +308,15 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       case 'room_error':
         setError(payload.error);
+        if (payload.error === 'Room not found' || payload.error === 'Invalid PIN') {
+          currentRoomRef.current = null;
+          currentRoomPinRef.current = undefined;
+          try { localStorage.removeItem('arkion_current_room'); } catch {}
+          try { sessionStorage.removeItem('arkion_current_room'); } catch {}
+          setCurrentRoom(null);
+          setMessages([]);
+          setRoomParticipants([]);
+        }
         break;
 
       case 'delete_message':
@@ -436,14 +471,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       ws.current = null;
     }
     setConnected(false);
-    setCurrentUser(null);
-    setMessages([]);
-    setCurrentRoom(null);
-    currentRoomRef.current = null;
-    currentRoomPinRef.current = undefined;
-    try { sessionStorage.removeItem('arkion_current_room'); } catch {}
-    setRoomParticipants([]);
-    setTypingUsers([]);
   }, []);
 
   // ─── Public actions ───────────────────────────────────────────────────────────
@@ -477,7 +504,12 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const leaveRoom = useCallback(() => {
     currentRoomRef.current = null;
     currentRoomPinRef.current = undefined;
+    try { localStorage.removeItem('arkion_current_room'); } catch {}
     try { sessionStorage.removeItem('arkion_current_room'); } catch {}
+    setCurrentRoom(null);
+    setMessages([]);
+    setRoomParticipants([]);
+    setTypingUsers([]);
     sendRaw({ type: 'leave_room', payload: {} });
   }, [sendRaw]);
 

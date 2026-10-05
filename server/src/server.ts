@@ -216,13 +216,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
 
   // ─── 1. Session Recovery: Reuse existing identity if sessionId match ───────
   if (sessionId) {
-    for (const u of users.values()) {
-      if (u.sessionId === sessionId) {
-        user = u;
-        userId = u.id;
-        break;
-      }
-    }
+    user = await findUserBySessionId(sessionId);
   }
 
   if (user) {
@@ -263,6 +257,12 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
     JSON.stringify(user)
   );
 
+  await redis.setex(
+    REDIS_KEYS.session(user.sessionId),
+    EXPIRATION_TIMES.user,
+    userId
+  );
+
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.AUTH_SUCCESS,
     payload: {
@@ -299,16 +299,67 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
     if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Set());
     roomUsers.get(roomId)!.add(userId);
 
-    const room = rooms.get(roomId);
-    if (room) {
-      room.participants.add(userId);
+    let room = rooms.get(roomId);
+    if (!room) {
+      try {
+        const roomData = await redis.get(REDIS_KEYS.room(roomId));
+        if (roomData) {
+          const parsed = JSON.parse(roomData);
+          const restoredRoom: ServerRoom = {
+            ...parsed,
+            participants: new Set(parsed.participants || []),
+          };
+          room = restoredRoom;
+          rooms.set(roomId, restoredRoom);
+        }
+      } catch (e) {
+        console.error('[AUTH] Error restoring room from redis:', e);
+      }
     }
 
-    const roomMessages = await getRoomMessages(roomId);
-    sendToClient(ws, {
-      type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
-      payload: { messages: roomMessages, roomId },
-    });
+    if (room) {
+      room.participants.add(userId);
+
+      const participantUsers: Array<{ id: string; username: string }> = [];
+      for (const pid of room.participants) {
+        const p = await getUser(pid);
+        if (p) participantUsers.push({ id: p.id, username: p.username });
+      }
+
+      sendToClient(ws, {
+        type: WS_MESSAGE_TYPES.ROOM_JOINED,
+        payload: {
+          room: {
+            id: room.id,
+            code: room.code,
+            name: room.name,
+            hasPin: !!room.pin,
+            createdAt: room.createdAt,
+            expiresAt: room.expiresAt,
+          },
+          participants: participantUsers,
+        },
+      });
+
+      const roomMessages = await getRoomMessages(roomId);
+      sendToClient(ws, {
+        type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
+        payload: { messages: roomMessages, roomId },
+      });
+    } else {
+      user.currentRoom = undefined;
+      await redis.setex(
+        REDIS_KEYS.user(userId),
+        EXPIRATION_TIMES.user,
+        JSON.stringify(user)
+      );
+      globalUsers.add(userId);
+      const globalMessages = await getGlobalMessages();
+      sendToClient(ws, {
+        type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
+        payload: { messages: globalMessages, roomId: 'global' },
+      });
+    }
   } else {
     globalUsers.add(userId);
     const globalMessages = await getGlobalMessages();
@@ -447,6 +498,12 @@ messageHandlers.set(WS_MESSAGE_TYPES.CREATE_ROOM, async (ws, userId, payload) =>
 
   user.currentRoom = roomId;
 
+  await redis.setex(
+    REDIS_KEYS.user(userId),
+    EXPIRATION_TIMES.user,
+    JSON.stringify(user)
+  );
+
   globalUsers.delete(userId);
   if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Set());
   roomUsers.get(roomId)!.add(userId);
@@ -519,12 +576,19 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
     await leaveRoom(userId, user.currentRoom);
   }
 
+  const isNewParticipant = !room.participants.has(userId);
   room.participants.add(userId);
   user.currentRoom = room.id;
 
   globalUsers.delete(userId);
   if (!roomUsers.has(room.id)) roomUsers.set(room.id, new Set());
   roomUsers.get(room.id)!.add(userId);
+
+  await redis.setex(
+    REDIS_KEYS.user(userId),
+    EXPIRATION_TIMES.user,
+    JSON.stringify(user)
+  );
 
   await redis.setex(
     REDIS_KEYS.room(room.id),
@@ -534,6 +598,12 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
 
   await redis.sadd(REDIS_KEYS.roomParticipants(room.id), userId);
   await redis.expire(REDIS_KEYS.roomParticipants(room.id), EXPIRATION_TIMES.room);
+
+  const participantUsers: Array<{ id: string; username: string }> = [];
+  for (const pid of room.participants) {
+    const p = await getUser(pid);
+    if (p) participantUsers.push({ id: p.id, username: p.username });
+  }
 
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.ROOM_JOINED,
@@ -546,26 +616,25 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
         createdAt: room.createdAt,
         expiresAt: room.expiresAt,
       },
-      participants: Array.from(room.participants).map(pid => {
-        const p = users.get(pid);
-        return p ? { id: p.id, username: p.username } : null;
-      }).filter(Boolean),
+      participants: participantUsers,
     },
   });
 
-  await broadcastToRoom(room.id, {
-    type: WS_MESSAGE_TYPES.USER_JOINED,
-    payload: {
-      user: { id: userId, username: user.username },
-      message: {
-        id: generateId(),
-        content: `${user.username} joined the room`,
-        type: 'system',
-        timestamp: Date.now(),
-        roomId: room.id,
+  if (isNewParticipant) {
+    await broadcastToRoom(room.id, {
+      type: WS_MESSAGE_TYPES.USER_JOINED,
+      payload: {
+        user: { id: userId, username: user.username },
+        message: {
+          id: generateId(),
+          content: `${user.username} joined the room`,
+          type: 'system',
+          timestamp: Date.now(),
+          roomId: room.id,
+        },
       },
-    },
-  });
+    });
+  }
 
   const roomMessages = await getRoomMessages(room.id);
   sendToClient(ws, {
@@ -813,15 +882,38 @@ async function broadcastToRoom(roomId: string, message: any, excludeUserId?: str
 }
 
 async function leaveRoom(userId: string, roomId: string) {
-  const user = users.get(userId);
-  const room = rooms.get(roomId);
-  if (!user || !room) return;
+  const user = users.get(userId) || (await getUser(userId));
+  let room = rooms.get(roomId);
+  if (!room) {
+    try {
+      const roomData = await redis.get(REDIS_KEYS.room(roomId));
+      if (roomData) {
+        const parsed = JSON.parse(roomData);
+        const restoredRoom: ServerRoom = {
+          ...parsed,
+          participants: new Set(parsed.participants || []),
+        };
+        room = restoredRoom;
+        rooms.set(roomId, restoredRoom);
+      }
+    } catch (e) {
+      console.error('[leaveRoom] Error fetching room from redis:', e);
+    }
+  }
+  if (!room) return;
 
   room.participants.delete(userId);
-  user.currentRoom = undefined;
+  if (user) {
+    user.currentRoom = undefined;
+    await redis.setex(
+      REDIS_KEYS.user(userId),
+      EXPIRATION_TIMES.user,
+      JSON.stringify(user)
+    );
+  }
 
   roomUsers.get(roomId)?.delete(userId);
-  globalUsers.add(userId);
+  if (user) globalUsers.add(userId);
 
   if (room.participants.size > 0) {
     await redis.setex(
@@ -830,26 +922,35 @@ async function leaveRoom(userId: string, roomId: string) {
       JSON.stringify({ ...room, participants: Array.from(room.participants) })
     );
     await redis.srem(REDIS_KEYS.roomParticipants(roomId), userId);
-    await broadcastToRoom(roomId, {
-      type: WS_MESSAGE_TYPES.USER_LEFT,
-      payload: {
-        user: { id: userId, username: user.username },
-        message: {
-          id: generateId(),
-          content: `${user.username} left the room`,
-          type: 'system',
-          timestamp: Date.now(),
-          roomId: roomId,
+    if (user) {
+      await broadcastToRoom(roomId, {
+        type: WS_MESSAGE_TYPES.USER_LEFT,
+        payload: {
+          user: { id: userId, username: user.username },
+          message: {
+            id: generateId(),
+            content: `${user.username} left the room`,
+            type: 'system',
+            timestamp: Date.now(),
+            roomId: roomId,
+          },
         },
-      },
-    });
+      });
+    }
   } else {
+    // Keep the room alive in Redis for its 12h TTL so members can rejoin!
     rooms.delete(roomId);
-    await redis.del(REDIS_KEYS.room(roomId));
-    await redis.del(REDIS_KEYS.roomParticipants(roomId));
+    await redis.srem(REDIS_KEYS.roomParticipants(roomId), userId);
+    await redis.setex(
+      REDIS_KEYS.room(roomId),
+      EXPIRATION_TIMES.room,
+      JSON.stringify({ ...room, participants: [] })
+    );
   }
 
-  console.log(`User ${user.username} left room ${room.code}`);
+  if (user) {
+    console.log(`User ${user.username} left room ${room.code}`);
+  }
 }
 
 async function getGlobalMessages(limit = 50): Promise<any[]> {
@@ -960,30 +1061,36 @@ wss.on('connection', (ws: any) => {
       if (user) {
         if (isCurrentSocket) {
           globalUsers.delete(id);
+          if (user.currentRoom) {
+            roomUsers.get(user.currentRoom)?.delete(id);
+          }
         }
 
         const _gracePeriod = setTimeout(() => {
           // If the user reconnected, clients.has(id) will be true again
           if (clients.has(id)) return; // They came back — do nothing
 
-          // They didn't come back — full cleanup
-          if (user.currentRoom) leaveRoom(id, user.currentRoom);
-          broadcastToAll({
-            type: WS_MESSAGE_TYPES.USER_LEFT,
-            payload: {
-              user: { id, username: user.username },
-              message: {
-                id: generateId(),
-                content: `${user.username} left the chat`,
-                type: 'system',
-                timestamp: Date.now(),
-                roomId: 'global',
+          // Only broadcast to global chat if they were actually in global chat
+          if (!user.currentRoom) {
+            broadcastToAll({
+              type: WS_MESSAGE_TYPES.USER_LEFT,
+              payload: {
+                user: { id, username: user.username },
+                message: {
+                  id: generateId(),
+                  content: `${user.username} left the chat`,
+                  type: 'system',
+                  timestamp: Date.now(),
+                  roomId: 'global',
+                },
               },
-            },
-          }, id);
+            }, id);
+          }
+
+          // Inactive socket cleanup: remove from memory cache (Redis preserves state)
           users.delete(id);
           messageRate.delete(id);
-          console.log(`User cleaned up after grace period: ${user.username}`);
+          console.log(`User socket state cleaned up after grace period: ${user.username}`);
         }, 120_000); // 2 minutes grace
 
         // If they reconnect via AUTH, the old timer is harmless (clients.has check)
@@ -1292,11 +1399,32 @@ app.post('/api/upload', upload.single('file'), async (req: express.Request, res:
   }
 });
 
+async function getUser(userId: string): Promise<ServerUser | undefined> {
+  let user = users.get(userId);
+  if (!user) {
+    try {
+      const uData = await redis.get(REDIS_KEYS.user(userId));
+      if (uData) {
+        user = JSON.parse(uData);
+        if (user) users.set(userId, user);
+      }
+    } catch (e) {
+      console.error('Error fetching user from Redis:', e);
+    }
+  }
+  return user;
+}
+
 async function findUserBySessionId(sessionId: string): Promise<ServerUser | undefined> {
   for (const u of users.values()) {
     if (u.sessionId === sessionId) return u;
   }
   try {
+    const userId = await redis.get(REDIS_KEYS.session(sessionId));
+    if (userId) {
+      const user = await getUser(userId);
+      if (user) return user;
+    }
     let cursor = '0';
     do {
       const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'user:*', 'COUNT', 50);
@@ -1307,6 +1435,7 @@ async function findUserBySessionId(sessionId: string): Promise<ServerUser | unde
           const parsed = JSON.parse(uData);
           if (parsed.sessionId === sessionId) {
             users.set(parsed.id, parsed);
+            await redis.setex(REDIS_KEYS.session(sessionId), EXPIRATION_TIMES.user, parsed.id);
             return parsed;
           }
         }

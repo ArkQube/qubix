@@ -69,6 +69,7 @@ export const REDIS_KEYS = {
   room: (id: string) => `room:${id}`,
   file: (id: string) => `file:${id}`,
   user: (id: string) => `user:${id}`,
+  session: (sessionId: string) => `session:${sessionId}`,
   roomMessages: (roomId: string) => `room:${roomId}:messages`,
   globalMessages: () => 'global:messages',
   roomParticipants: (roomId: string) => `room:${roomId}:participants`,
