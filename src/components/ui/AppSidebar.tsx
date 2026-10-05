@@ -12,6 +12,7 @@ import {
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { DEFAULT_CONFIG } from '@/types';
 import { formatFileSize, getTimeRemaining } from '@/lib/utils';
+import { ArkLogo } from './ArkLogo';
 
 interface SidebarProps {
   activeTab: string;
@@ -33,7 +34,7 @@ export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
       <div className="p-5 border-b bg-gradient-to-b from-primary/5 to-transparent">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 flex items-center justify-center">
-            <img src="/logo.svg" alt="Logo" className="w-full h-full object-contain" />
+            <ArkLogo className="w-full h-full" />
           </div>
 
           <div className="flex flex-col justify-center gap-0.5">

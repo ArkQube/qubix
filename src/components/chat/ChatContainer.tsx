@@ -5,7 +5,6 @@ import { ChatInput } from './ChatInput';
 import { RoomManager } from '../rooms/RoomManager';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import {
-  Loader2,
   WifiOff,
   Users,
   Clock,
@@ -13,6 +12,7 @@ import {
 } from 'lucide-react';
 import { getTimeRemaining } from '@/lib/utils';
 import { FileDropOverlay } from './FileDropOverlay';
+import { ArkLoader } from '@/components/ui/ArkLoader';
 
 export function ChatContainer() {
   const {
@@ -101,12 +101,12 @@ export function ChatContainer() {
   // Connection status overlay
   if (connecting) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4 text-primary" />
-          <p className="text-lg font-medium">Connecting to AQchat...</p>
-          <p className="text-sm text-muted-foreground">Establishing secure connection</p>
-        </div>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <ArkLoader
+          size="lg"
+          label="Connecting to AQchat"
+          sublabel="Establishing secure encrypted connection"
+        />
       </div>
     );
   }
