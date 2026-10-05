@@ -292,10 +292,11 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
     });
   }
 
+  globalUsers.add(userId);
+
   // If user was already in a private room during disconnect/recovery, restore room scope
   if (user.currentRoom) {
     const roomId = user.currentRoom;
-    globalUsers.delete(userId);
     if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Set());
     roomUsers.get(roomId)!.add(userId);
 
@@ -353,21 +354,15 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
         EXPIRATION_TIMES.user,
         JSON.stringify(user)
       );
-      globalUsers.add(userId);
-      const globalMessages = await getGlobalMessages();
-      sendToClient(ws, {
-        type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
-        payload: { messages: globalMessages, roomId: 'global' },
-      });
     }
-  } else {
-    globalUsers.add(userId);
-    const globalMessages = await getGlobalMessages();
-    sendToClient(ws, {
-      type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
-      payload: { messages: globalMessages, roomId: 'global' },
-    });
   }
+
+  // Always send global messages history so Global Chat is instantly accessible
+  const globalMessages = await getGlobalMessages();
+  sendToClient(ws, {
+    type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
+    payload: { messages: globalMessages, roomId: 'global' },
+  });
 
   console.log(`User authenticated: ${user.username} (${userId}) ${sessionId ? '[RECOVERY]' : '[NEW]'}`);
 });
@@ -504,7 +499,6 @@ messageHandlers.set(WS_MESSAGE_TYPES.CREATE_ROOM, async (ws, userId, payload) =>
     JSON.stringify(user)
   );
 
-  globalUsers.delete(userId);
   if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Set());
   roomUsers.get(roomId)!.add(userId);
 
@@ -580,7 +574,6 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
   room.participants.add(userId);
   user.currentRoom = room.id;
 
-  globalUsers.delete(userId);
   if (!roomUsers.has(room.id)) roomUsers.set(room.id, new Set());
   roomUsers.get(room.id)!.add(userId);
 
@@ -656,6 +649,25 @@ messageHandlers.set(WS_MESSAGE_TYPES.LEAVE_ROOM, async (ws, userId, payload) => 
     type: WS_MESSAGE_TYPES.ROOM_LEFT,
     payload: { roomId },
   });
+});
+
+// Get message history handler (allows switching between global and room seamlessly)
+messageHandlers.set(WS_MESSAGE_TYPES.GET_HISTORY, async (ws, userId, payload) => {
+  const { roomId } = payload || {};
+  if (roomId && roomId !== 'global') {
+    const roomMessages = await getRoomMessages(roomId);
+    sendToClient(ws, {
+      type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
+      payload: { messages: roomMessages, roomId },
+    });
+  } else {
+    globalUsers.add(userId);
+    const globalMessages = await getGlobalMessages();
+    sendToClient(ws, {
+      type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
+      payload: { messages: globalMessages, roomId: 'global' },
+    });
+  }
 });
 
 // Typing indicator handler

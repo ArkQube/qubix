@@ -10,6 +10,8 @@ interface WebSocketContextType {
   currentUser: User | null;
   messages: Message[];
   currentRoom: Room | null;
+  activeSpace: 'global' | 'room';
+  switchSpace: (space: 'global' | 'room') => void;
   roomParticipants: User[];
   typingUsers: string[];
   uploadProgress: UploadProgress | null;
@@ -71,8 +73,32 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   };
 
   const initialRoomData = useRef(getInitialRoom());
+
+  const getInitialSpace = (): 'global' | 'room' => {
+    try {
+      const savedSpace = localStorage.getItem('arkion_active_space');
+      if (savedSpace === 'global' || savedSpace === 'room') {
+        if (savedSpace === 'room' && !initialRoomData.current.room) return 'global';
+        return savedSpace;
+      }
+    } catch {}
+    return initialRoomData.current.room ? 'room' : 'global';
+  };
+
+  const [activeSpace, setActiveSpace] = useState<'global' | 'room'>(getInitialSpace());
+  const activeSpaceRef = useRef<'global' | 'room'>(activeSpace);
+
+  useEffect(() => {
+    activeSpaceRef.current = activeSpace;
+    try {
+      localStorage.setItem('arkion_active_space', activeSpace);
+    } catch {}
+  }, [activeSpace]);
+
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [globalMessages, setGlobalMessages] = useState<Message[]>([]);
+  const [roomMessages, setRoomMessages] = useState<Message[]>([]);
+  const messages = activeSpace === 'room' ? roomMessages : globalMessages;
   const [currentRoom, setCurrentRoom] = useState<Room | null>(initialRoomData.current.room);
   const [roomParticipants, setRoomParticipants] = useState<User[]>([]);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
@@ -105,7 +131,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
-      setMessages(prev => {
+      setGlobalMessages(prev => {
+        const active = prev.filter(m => m.expiresAt > now);
+        return active.length !== prev.length ? active : prev;
+      });
+      setRoomMessages(prev => {
         const active = prev.filter(m => m.expiresAt > now);
         return active.length !== prev.length ? active : prev;
       });
@@ -120,7 +150,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       const queue = [...pendingMessages.current];
       pendingMessages.current = [];
       queue.forEach(msg => {
-        if (msg.type === 'send_message' && !msg.payload?.roomId && currentRoomRef.current?.id) {
+        if (msg.type === 'send_message' && !msg.payload?.roomId && activeSpaceRef.current === 'room' && currentRoomRef.current?.id) {
           msg.payload.roomId = currentRoomRef.current.id;
         }
         ws.current?.send(JSON.stringify(msg));
@@ -176,91 +206,89 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         break;
 
       case 'message_received': {
-        // ── FIX 2: filter by roomId ──────────────────────────────────────────
         const incomingRoomId: string = payload.roomId || 'global';
-        const myRoomId: string = currentRoomRef.current?.id || 'global';
+        const incomingMsg = payload.message;
 
-        if (incomingRoomId !== myRoomId) {
-          // Message belongs to a different space — silently discard
-          break;
-        }
-
-        setMessages(prev => {
-          if (prev.some(m => m.id === payload.message.id)) return prev;
+        const updateList = (prev: Message[]) => {
+          if (prev.some(m => m.id === incomingMsg.id)) return prev;
 
           // Check if this incoming message confirms an optimistic ghost message
           const ghostIdx = prev.findIndex(m => 
-            (m.status === 'sending' && payload.message.fileData && m.fileData && 
-              (m.fileData.fileId === payload.message.fileData.fileId || 
-               m.fileData.url === payload.message.fileData.url ||
-               m.id === payload.message.fileData.fileId))
+            (m.status === 'sending' && incomingMsg.fileData && m.fileData && 
+              (m.fileData.fileId === incomingMsg.fileData.fileId || 
+               m.fileData.url === incomingMsg.fileData.url ||
+               m.id === incomingMsg.fileData.fileId))
           );
 
           if (ghostIdx !== -1) {
             const next = [...prev];
-            next[ghostIdx] = payload.message;
+            next[ghostIdx] = incomingMsg;
             return next.slice(-100);
           }
 
-          return [...prev, payload.message].slice(-100);
-        });
+          return [...prev, incomingMsg].slice(-100);
+        };
+
+        if (incomingRoomId === 'global') {
+          setGlobalMessages(updateList);
+        } else if (currentRoomRef.current && incomingRoomId === currentRoomRef.current.id) {
+          setRoomMessages(updateList);
+        }
         break;
       }
 
       case 'message_history': {
         const historyRoomId = payload.roomId || 'global';
-        const currentRoomId = currentRoomRef.current?.id || 'global';
+        const serverMsgs: Message[] = payload.messages || [];
 
-        if (historyRoomId !== currentRoomId) {
-          // Discard history for a different space (e.g. global history arriving while in room)
-          break;
-        }
-
-        setMessages(prev => {
+        const mergeHistory = (prev: Message[]) => {
           const inFlight = prev.filter(m => m.status === 'sending');
-          const serverMsgs: Message[] = payload.messages || [];
           return [...serverMsgs, ...inFlight.filter(im => !serverMsgs.some(sm => sm.id === im.id))].slice(-100);
-        });
+        };
+
+        if (historyRoomId === 'global') {
+          setGlobalMessages(mergeHistory);
+        } else if (currentRoomRef.current && historyRoomId === currentRoomRef.current.id) {
+          setRoomMessages(mergeHistory);
+        }
         break;
       }
 
       case 'user_joined': {
         const msgRoomId: string = payload.message?.roomId || 'global';
-        const myRoom: string = currentRoomRef.current?.id || 'global';
 
-        if (msgRoomId !== myRoom) break;
-
-        if (payload.message) {
-          setMessages(prev => [...prev, payload.message].slice(-100));
-        }
-        if (payload.user && currentRoomRef.current) {
-          setRoomParticipants(prev => {
-            if (prev.some(p => p.id === payload.user.id)) return prev;
-            return [...prev, payload.user];
-          });
+        if (msgRoomId === 'global') {
+          if (payload.message) setGlobalMessages(prev => [...prev, payload.message].slice(-100));
+        } else if (currentRoomRef.current && msgRoomId === currentRoomRef.current.id) {
+          if (payload.message) setRoomMessages(prev => [...prev, payload.message].slice(-100));
+          if (payload.user) {
+            setRoomParticipants(prev => {
+              if (prev.some(p => p.id === payload.user.id)) return prev;
+              return [...prev, payload.user];
+            });
+          }
         }
         break;
       }
 
       case 'user_left': {
         const msgRoomId: string = payload.message?.roomId || 'global';
-        const myRoom: string = currentRoomRef.current?.id || 'global';
 
-        if (msgRoomId !== myRoom) break;
-
-        if (payload.message) {
-          setMessages(prev => [...prev, payload.message].slice(-100));
-        }
-        if (payload.user) {
-          setRoomParticipants(prev => prev.filter(p => p.id !== payload.user.id));
+        if (msgRoomId === 'global') {
+          if (payload.message) setGlobalMessages(prev => [...prev, payload.message].slice(-100));
+        } else if (currentRoomRef.current && msgRoomId === currentRoomRef.current.id) {
+          if (payload.message) setRoomMessages(prev => [...prev, payload.message].slice(-100));
+          if (payload.user) {
+            setRoomParticipants(prev => prev.filter(p => p.id !== payload.user.id));
+          }
         }
         break;
       }
 
       case 'typing_update': {
         const targetRoomId = payload.roomId || 'global';
-        const myRoom = currentRoomRef.current?.id || 'global';
-        if (targetRoomId !== myRoom) break;
+        const currentSpaceId = activeSpaceRef.current === 'room' && currentRoomRef.current ? currentRoomRef.current.id : 'global';
+        if (targetRoomId !== currentSpaceId) break;
 
         setTypingUsers(payload.typingUsers || []);
         break;
@@ -275,7 +303,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           }));
         } catch {}
         setCurrentRoom(payload.room);
-        setMessages([]);
+        setActiveSpace('room');
+        setRoomMessages([]);
         setRoomParticipants([]);
         flushPendingMessages();
         break;
@@ -289,8 +318,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           }));
         } catch {}
         setCurrentRoom(payload.room);
+        setActiveSpace('room');
         // Preserve any in-flight uploading file messages
-        setMessages(prev => prev.filter(m => m.status === 'sending'));
+        setRoomMessages(prev => prev.filter(m => m.status === 'sending'));
         setRoomParticipants(payload.participants || []);
         flushPendingMessages();
         break;
@@ -301,7 +331,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         try { localStorage.removeItem('arkion_current_room'); } catch {}
         try { sessionStorage.removeItem('arkion_current_room'); } catch {}
         setCurrentRoom(null);
-        setMessages([]);
+        setActiveSpace('global');
+        setRoomMessages([]);
         setRoomParticipants([]);
         setTypingUsers([]);
         break;
@@ -314,23 +345,32 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           try { localStorage.removeItem('arkion_current_room'); } catch {}
           try { sessionStorage.removeItem('arkion_current_room'); } catch {}
           setCurrentRoom(null);
-          setMessages([]);
+          setActiveSpace('global');
+          setRoomMessages([]);
           setRoomParticipants([]);
         }
         break;
 
-      case 'delete_message':
-        setMessages(prev => prev.filter(m => m.id !== payload.messageId));
+      case 'delete_message': {
+        const targetRoomId = payload.roomId || 'global';
+        if (targetRoomId === 'global') {
+          setGlobalMessages(prev => prev.filter(m => m.id !== payload.messageId));
+        } else {
+          setRoomMessages(prev => prev.filter(m => m.id !== payload.messageId));
+        }
         break;
+      }
 
       case 'reaction_update': {
         const { messageId, reactions, roomId: targetRoomId } = payload;
-        const myRoom = currentRoomRef.current?.id || 'global';
-        if (targetRoomId !== myRoom) break;
-
-        setMessages(prev => prev.map(m => 
+        const updateReaction = (prev: Message[]) => prev.map(m => 
           m.id === messageId ? { ...m, reactions } : m
-        ));
+        );
+        if (!targetRoomId || targetRoomId === 'global') {
+          setGlobalMessages(updateReaction);
+        } else {
+          setRoomMessages(updateReaction);
+        }
         break;
       }
 
@@ -382,7 +422,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
         // Only wipe messages/participants on FRESH connections if not in a private room.
         if (!isSuppressed && !currentRoomRef.current) {
-          setMessages([]);
+          setGlobalMessages([]);
           setRoomParticipants([]);
           setTypingUsers([]);
         }
@@ -474,17 +514,35 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ─── Public actions ───────────────────────────────────────────────────────────
+  const switchSpace = useCallback((space: 'global' | 'room') => {
+    if (space === 'room' && !currentRoomRef.current) return;
+    setActiveSpace(space);
+    activeSpaceRef.current = space;
+    setTypingUsers([]);
+
+    if (space === 'global') {
+      sendRaw({
+        type: 'get_history',
+        payload: { roomId: undefined },
+      });
+    } else if (space === 'room' && currentRoomRef.current) {
+      sendRaw({
+        type: 'get_history',
+        payload: { roomId: currentRoomRef.current.id },
+      });
+    }
+  }, [sendRaw]);
+
   const sendChatMessage = useCallback((content: string, fileData?: any, _ghostId?: string) => {
     if (!content.trim() && !fileData) return;
 
-    // Do NOT immediately delete ghost preview. It will be seamlessly replaced by message_received.
-    // If the upload failed, uploadFile's catch block cleans it up.
+    const targetRoomId = activeSpaceRef.current === 'room' ? currentRoomRef.current?.id : undefined;
 
     sendRaw({
       type: 'send_message',
       payload: {
         content,
-        roomId: currentRoomRef.current?.id,
+        roomId: targetRoomId,
         type: fileData ? 'file' : 'text',
         fileData,
       },
@@ -507,16 +565,19 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     try { localStorage.removeItem('arkion_current_room'); } catch {}
     try { sessionStorage.removeItem('arkion_current_room'); } catch {}
     setCurrentRoom(null);
-    setMessages([]);
+    setActiveSpace('global');
+    setRoomMessages([]);
     setRoomParticipants([]);
     setTypingUsers([]);
     sendRaw({ type: 'leave_room', payload: {} });
+    sendRaw({ type: 'get_history', payload: { roomId: undefined } });
   }, [sendRaw]);
 
   const sendTyping = useCallback((isTyping: boolean) => {
+    const targetRoomId = activeSpaceRef.current === 'room' ? currentRoomRef.current?.id : undefined;
     sendRaw({
       type: 'typing',
-      payload: { isTyping, roomId: currentRoomRef.current?.id },
+      payload: { isTyping, roomId: targetRoomId },
     });
   }, [sendRaw]);
 
@@ -535,6 +596,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const uploadFile = useCallback(async (file: File, uploadId?: string): Promise<any> => {
     const fileId = uploadId || `upload-${Date.now()}`;
     const previewUrl = URL.createObjectURL(file);
+    const targetRoomId = activeSpaceRef.current === 'room' ? (currentRoomRef.current?.id || 'global') : 'global';
 
     setUploadProgress({ fileId, progress: 0, status: 'uploading' });
 
@@ -547,7 +609,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         timestamp: Date.now(),
         expiresAt: Date.now() + DEFAULT_CONFIG.fileLifetime,
         type: 'file',
-        roomId: currentRoomRef.current?.id || 'global',
+        roomId: targetRoomId,
         status: 'sending',
         fileData: {
           fileId,
@@ -561,7 +623,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           expiresAt: Date.now() + DEFAULT_CONFIG.fileLifetime
         }
       };
-      setMessages(prev => [...prev, ghostMessage]);
+      if (targetRoomId === 'global') {
+        setGlobalMessages(prev => [...prev, ghostMessage]);
+      } else {
+        setRoomMessages(prev => [...prev, ghostMessage]);
+      }
     }
 
     try {
@@ -632,7 +698,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId: sessionId.current,
-          roomId: currentRoomRef.current?.id,
+          roomId: targetRoomId === 'global' ? undefined : targetRoomId,
           fileId,
           fileName: file.name,
           fileSize: file.size,
@@ -653,7 +719,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       return data.file;
     } catch (err: any) {
       setUploadProgress({ fileId, progress: 0, status: 'error', error: err.message });
-      setMessages(prev => prev.filter(m => m.id !== fileId)); // Wipe ghost on fail
+      if (targetRoomId === 'global') {
+        setGlobalMessages(prev => prev.filter(m => m.id !== fileId));
+      } else {
+        setRoomMessages(prev => prev.filter(m => m.id !== fileId));
+      }
       throw err;
     }
   }, [currentUser]);
@@ -736,6 +806,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     currentUser,
     messages,
     currentRoom,
+    activeSpace,
+    switchSpace,
     roomParticipants,
     typingUsers,
     uploadProgress,

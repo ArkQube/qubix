@@ -13,24 +13,38 @@ import {
   DialogTrigger,
   DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Plus, Lock, Users, LogOut, Copy, Check, Globe, Share2, Hash } from 'lucide-react';
 import { validateRoomCode, validatePIN } from '@/lib/utils';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 
 interface RoomManagerProps {
   currentRoom: { id: string; code: string; name?: string; hasPin?: boolean; expiresAt: number } | null;
+  activeSpace: 'global' | 'room';
+  onSwitchSpace: (space: 'global' | 'room') => void;
   onCreateRoom: (name?: string, pin?: string) => void;
   onJoinRoom: (code: string, pin?: string) => void;
   onLeaveRoom: () => void;
 }
 
-export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom }: RoomManagerProps) {
+export function RoomManager({ currentRoom, activeSpace, onSwitchSpace, onCreateRoom, onJoinRoom, onLeaveRoom }: RoomManagerProps) {
   const { roomParticipants } = useWebSocket();
-  const participantCount = currentRoom ? roomParticipants.length : 'Global';
+  const participantCount = (activeSpace === 'room' && currentRoom) ? roomParticipants.length : 'Global';
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [roomName, setRoomName] = useState('');
   const [usePin, setUsePin] = useState(false);
   const [roomPin, setRoomPin] = useState('');
@@ -89,7 +103,7 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
 
         {/* Left: Mode indicator */}
         <div className="flex items-center gap-2">
-          {currentRoom ? (
+          {activeSpace === 'room' && currentRoom ? (
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
                 <Lock className="w-4 h-4 text-primary" />
@@ -133,16 +147,32 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
         {/* Right: Action buttons */}
         <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
 
-          {/* Global Chat button — click to go back to global from a private room */}
-          {currentRoom && (
+          {/* When in Private Room: Switch to Global Chat WITHOUT leaving the room! */}
+          {activeSpace === 'room' && currentRoom && (
             <Button
               variant="outline"
               size="sm"
-              onClick={onLeaveRoom}
+              onClick={() => onSwitchSpace('global')}
               className="gap-1.5"
+              title="Switch to Global Chat (your private room stays open)"
             >
               <Globe className="w-4 h-4" />
               <span className="hidden sm:inline">Global Chat</span>
+            </Button>
+          )}
+
+          {/* When in Global Chat and user has a joined Private Room: Quick Return Button */}
+          {activeSpace === 'global' && currentRoom && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onSwitchSpace('room')}
+              className="gap-1.5 border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary font-medium"
+              title={`Return to ${currentRoom.name || currentRoom.code}`}
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Back to {currentRoom.name || currentRoom.code}</span>
+              <span className="sm:hidden text-xs font-mono">{currentRoom.code}</span>
             </Button>
           )}
 
@@ -304,17 +334,37 @@ export function RoomManager({ currentRoom, onCreateRoom, onJoinRoom, onLeaveRoom
             </Dialog>
           )}
 
-          {/* Leave Room (destructive confirmation) */}
+          {/* Leave Room (destructive confirmation modal) */}
           {currentRoom && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onLeaveRoom}
-              title="Leave room"
-              className="text-destructive hover:text-destructive hover:bg-destructive/10"
-            >
-              <LogOut className="w-4 h-4" />
-            </Button>
+            <AlertDialog open={leaveDialogOpen} onOpenChange={setLeaveDialogOpen}>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Leave room"
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                >
+                  <LogOut className="w-4 h-4" />
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Leave Room?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Are you sure you want to leave <span className="font-semibold text-foreground">"{currentRoom.name || currentRoom.code}"</span>? You will need the room code and PIN to rejoin.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={onLeaveRoom}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Leave Room
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
         </div>
       </div>

@@ -19,7 +19,7 @@ interface SidebarProps {
 }
 
 export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
-  const { currentUser, connected, currentRoom } = useWebSocket();
+  const { currentUser, connected, currentRoom, activeSpace, switchSpace } = useWebSocket();
 
   const menuItems = [
     { id: 'chat', label: 'Chat', icon: MessageSquare },
@@ -85,17 +85,34 @@ export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
         {/* Current Room Info */}
         {currentRoom && (
           <div className="p-4 mt-4">
-            <div className="bg-primary/5 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <Lock className="w-4 h-4 text-primary" />
-                <span className="text-sm font-medium">Current Room</span>
+            <button
+              onClick={() => {
+                switchSpace('room');
+                onTabChange('chat');
+              }}
+              className={`w-full text-left rounded-lg p-3 transition-colors border ${
+                activeSpace === 'room'
+                  ? 'bg-primary/10 border-primary/30 ring-1 ring-primary/20'
+                  : 'bg-primary/5 hover:bg-primary/10 border-transparent cursor-pointer'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-primary" />
+                  <span className="text-sm font-medium">Private Room</span>
+                </div>
+                {activeSpace === 'room' && (
+                  <span className="text-[10px] bg-primary/20 text-primary font-semibold px-1.5 py-0.5 rounded">
+                    Active
+                  </span>
+                )}
               </div>
-              <p className="text-sm truncate">{currentRoom.name || `Room ${currentRoom.code}`}</p>
+              <p className="text-sm font-medium truncate">{currentRoom.name || `Room ${currentRoom.code}`}</p>
               <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
                 <Clock className="w-3 h-3" />
                 <span>Expires in {getTimeRemaining(currentRoom.expiresAt)}</span>
               </div>
-            </div>
+            </button>
           </div>
         )}
       </ScrollArea>

@@ -83,6 +83,7 @@ export const WS_MESSAGE_TYPES = {
   JOIN_ROOM: 'join_room',
   LEAVE_ROOM: 'leave_room',
   CREATE_ROOM: 'create_room',
+  GET_HISTORY: 'get_history',
   TYPING: 'typing',
   DELETE_MESSAGE: 'delete_message',
   DELETE_FILE: 'delete_file',

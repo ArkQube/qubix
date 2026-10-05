@@ -65,6 +65,7 @@ export type MessageType =
   | 'join_room'
   | 'leave_room'
   | 'create_room'
+  | 'get_history'
   | 'typing'
   | 'delete_message'
   | 'delete_file'
