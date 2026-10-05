@@ -21,7 +21,7 @@ export function ArkLogo({ className, size, alt = 'ARK Logo', style, ...props }: 
       src="/logo.svg"
       alt={alt}
       className={cn(
-        'object-contain select-none pointer-events-none dark:invert transition-all duration-200',
+        'object-contain select-none pointer-events-none transition-all duration-200',
         className
       )}
       style={customStyle}
