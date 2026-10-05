@@ -47,9 +47,19 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Helper to load persisted room on boot/refresh
+  const getInitialRoom = (): { room: Room | null; pin?: string } => {
+    try {
+      const stored = sessionStorage.getItem('arkion_current_room');
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return { room: null };
+  };
+
+  const initialRoomData = useRef(getInitialRoom());
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
+  const [currentRoom, setCurrentRoom] = useState<Room | null>(initialRoomData.current.room);
   const [roomParticipants, setRoomParticipants] = useState<User[]>([]);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
@@ -58,16 +68,12 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   // Set by ChatInput when the file picker is open (Android kills the socket).
   const suppressDisconnectUI = useRef(false);
 
-  // ─── FIX 1: keep a ref that always reflects the latest currentRoom ──────────
-  //
-  // WHY: handleWebSocketMessage is called from ws.onmessage which is set once
-  // inside connect() (useCallback with [] deps). Any state variable captured
-  // inside that callback is forever stale. Using a ref sidesteps the closure
-  // entirely — ref.current is always the live value.
-  //
-  const currentRoomRef = useRef<Room | null>(null);
-  const currentRoomPinRef = useRef<string | undefined>(undefined);
+  // ─── Ref sync: keep refs that always reflect the latest state ──────────────
+  const currentRoomRef = useRef<Room | null>(initialRoomData.current.room);
+  const currentRoomPinRef = useRef<string | undefined>(initialRoomData.current.pin);
   const currentUserRef = useRef<User | null>(null);
+  const pendingMessages = useRef<any[]>([]);
+
   useEffect(() => {
     currentRoomRef.current = currentRoom;
   }, [currentRoom]);
@@ -93,12 +99,27 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(interval);
   }, []);
 
-  // ─── Low-level WS send (internal) ───────────────────────────────────────────
+  // ─── Low-level WS send with resilient offline queueing ──────────────────────
+  const flushPendingMessages = useCallback(() => {
+    if (ws.current?.readyState === WebSocket.OPEN && pendingMessages.current.length > 0) {
+      console.log(`[WS] Flushing ${pendingMessages.current.length} queued messages`);
+      const queue = [...pendingMessages.current];
+      pendingMessages.current = [];
+      queue.forEach(msg => {
+        if (msg.type === 'send_message' && !msg.payload?.roomId && currentRoomRef.current?.id) {
+          msg.payload.roomId = currentRoomRef.current.id;
+        }
+        ws.current?.send(JSON.stringify(msg));
+      });
+    }
+  }, []);
+
   const sendRaw = useCallback((message: any) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify(message));
     } else {
-      console.warn('WebSocket not connected, message not sent:', message);
+      console.warn('[WS] Socket not open, queueing message:', message);
+      pendingMessages.current.push(message);
     }
   }, []);
 
@@ -122,6 +143,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
             }
           });
         }
+        flushPendingMessages();
         break;
 
       case 'auth_error':
@@ -130,17 +152,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       case 'message_received': {
         // ── FIX 2: filter by roomId ──────────────────────────────────────────
-        //
-        // The server's broadcastToAll() sends global messages to EVERY connected
-        // client, including users inside private rooms. We must discard any
-        // message whose roomId doesn't match where this client currently is.
-        //
-        //  payload.roomId === 'global'  → global chat message
-        //  payload.roomId === <uuid>    → private room message
-        //
-        // We read currentRoomRef.current (not the stale closure value) so this
-        // always reflects the user's actual current room.
-        //
         const incomingRoomId: string = payload.roomId || 'global';
         const myRoomId: string = currentRoomRef.current?.id || 'global';
 
@@ -151,16 +162,42 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
         setMessages(prev => {
           if (prev.some(m => m.id === payload.message.id)) return prev;
-          return [...prev, payload.message].slice(-50);
+
+          // Check if this incoming message confirms an optimistic ghost message
+          const ghostIdx = prev.findIndex(m => 
+            (m.status === 'sending' && payload.message.fileData && m.fileData && 
+              (m.fileData.fileId === payload.message.fileData.fileId || 
+               m.fileData.url === payload.message.fileData.url ||
+               m.id === payload.message.fileData.fileId))
+          );
+
+          if (ghostIdx !== -1) {
+            const next = [...prev];
+            next[ghostIdx] = payload.message;
+            return next.slice(-100);
+          }
+
+          return [...prev, payload.message].slice(-100);
         });
         break;
       }
 
-      case 'message_history':
-        // message_history is always scoped — server only sends history for the
-        // space the user just entered, so no extra filtering needed here.
-        setMessages(payload.messages || []);
+      case 'message_history': {
+        const historyRoomId = payload.roomId || 'global';
+        const currentRoomId = currentRoomRef.current?.id || 'global';
+
+        if (historyRoomId !== currentRoomId) {
+          // Discard history for a different space (e.g. global history arriving while in room)
+          break;
+        }
+
+        setMessages(prev => {
+          const inFlight = prev.filter(m => m.status === 'sending');
+          const serverMsgs: Message[] = payload.messages || [];
+          return [...serverMsgs, ...inFlight.filter(im => !serverMsgs.some(sm => sm.id === im.id))].slice(-100);
+        });
         break;
+      }
 
       case 'user_joined': {
         const msgRoomId: string = payload.message?.roomId || 'global';
@@ -205,20 +242,39 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       }
 
       case 'room_created':
+        currentRoomRef.current = payload.room;
+        try {
+          sessionStorage.setItem('arkion_current_room', JSON.stringify({
+            room: payload.room,
+            pin: currentRoomPinRef.current
+          }));
+        } catch {}
         setCurrentRoom(payload.room);
         setMessages([]);
         setRoomParticipants([]);
+        flushPendingMessages();
         break;
 
       case 'room_joined':
+        currentRoomRef.current = payload.room;
+        try {
+          sessionStorage.setItem('arkion_current_room', JSON.stringify({
+            room: payload.room,
+            pin: currentRoomPinRef.current
+          }));
+        } catch {}
         setCurrentRoom(payload.room);
-        setMessages([]);
+        // Preserve any in-flight uploading file messages
+        setMessages(prev => prev.filter(m => m.status === 'sending'));
         setRoomParticipants(payload.participants || []);
+        flushPendingMessages();
         break;
 
       case 'room_left':
-        setCurrentRoom(null);
+        currentRoomRef.current = null;
         currentRoomPinRef.current = undefined;
+        try { sessionStorage.removeItem('arkion_current_room'); } catch {}
+        setCurrentRoom(null);
         setMessages([]);
         setRoomParticipants([]);
         setTypingUsers([]);
@@ -289,10 +345,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         setConnecting(false);
         setError(null);
 
-        // Only wipe messages/participants on FRESH connections.
-        // Suppressed reconnects (file picker) preserve the chat history —
-        // the server re-auths and re-joins the room via session recovery.
-        if (!isSuppressed) {
+        // Only wipe messages/participants on FRESH connections if not in a private room.
+        if (!isSuppressed && !currentRoomRef.current) {
           setMessages([]);
           setRoomParticipants([]);
           setTypingUsers([]);
@@ -385,18 +439,19 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     setCurrentUser(null);
     setMessages([]);
     setCurrentRoom(null);
+    currentRoomRef.current = null;
     currentRoomPinRef.current = undefined;
+    try { sessionStorage.removeItem('arkion_current_room'); } catch {}
     setRoomParticipants([]);
     setTypingUsers([]);
   }, []);
 
   // ─── Public actions ───────────────────────────────────────────────────────────
-  const sendChatMessage = useCallback((content: string, fileData?: any, ghostId?: string) => {
+  const sendChatMessage = useCallback((content: string, fileData?: any, _ghostId?: string) => {
     if (!content.trim() && !fileData) return;
 
-    if (ghostId) {
-      setMessages(prev => prev.filter(m => m.id !== ghostId)); // Purge optimistic preview
-    }
+    // Do NOT immediately delete ghost preview. It will be seamlessly replaced by message_received.
+    // If the upload failed, uploadFile's catch block cleans it up.
 
     sendRaw({
       type: 'send_message',
@@ -420,7 +475,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }, [sendRaw]);
 
   const leaveRoom = useCallback(() => {
+    currentRoomRef.current = null;
     currentRoomPinRef.current = undefined;
+    try { sessionStorage.removeItem('arkion_current_room'); } catch {}
     sendRaw({ type: 'leave_room', payload: {} });
   }, [sendRaw]);
 

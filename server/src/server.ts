@@ -256,7 +256,6 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
 
   clients.set(userId, ws);
   socketUserMap.set(ws, userId);
-  globalUsers.add(userId);
 
   await redis.setex(
     REDIS_KEYS.user(userId),
@@ -293,11 +292,31 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
     });
   }
 
-  const globalMessages = await getGlobalMessages();
-  sendToClient(ws, {
-    type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
-    payload: { messages: globalMessages, roomId: 'global' },
-  });
+  // If user was already in a private room during disconnect/recovery, restore room scope
+  if (user.currentRoom) {
+    const roomId = user.currentRoom;
+    globalUsers.delete(userId);
+    if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Set());
+    roomUsers.get(roomId)!.add(userId);
+
+    const room = rooms.get(roomId);
+    if (room) {
+      room.participants.add(userId);
+    }
+
+    const roomMessages = await getRoomMessages(roomId);
+    sendToClient(ws, {
+      type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
+      payload: { messages: roomMessages, roomId },
+    });
+  } else {
+    globalUsers.add(userId);
+    const globalMessages = await getGlobalMessages();
+    sendToClient(ws, {
+      type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
+      payload: { messages: globalMessages, roomId: 'global' },
+    });
+  }
 
   console.log(`User authenticated: ${user.username} (${userId}) ${sessionId ? '[RECOVERY]' : '[NEW]'}`);
 });
@@ -382,7 +401,12 @@ messageHandlers.set(WS_MESSAGE_TYPES.SEND_MESSAGE, async (ws, userId, payload) =
   };
 
   if (roomId) {
-    broadcastToRoom(roomId, broadcastMessage);
+    user.currentRoom = roomId;
+    const room = rooms.get(roomId);
+    if (room) {
+      room.participants.add(userId);
+    }
+    await broadcastToRoom(roomId, broadcastMessage);
   } else {
     broadcastToAll(broadcastMessage);
   }
@@ -529,7 +553,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
     },
   });
 
-  broadcastToRoom(room.id, {
+  await broadcastToRoom(room.id, {
     type: WS_MESSAGE_TYPES.USER_JOINED,
     payload: {
       user: { id: userId, username: user.username },
@@ -583,7 +607,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.TYPING, async (ws, userId, payload) => {
     payload: { roomId: targetRoomId, typingUsers: Array.from(roomTyping) },
   };
 
-  if (roomId) { broadcastToRoom(roomId, typingUpdate); } else { broadcastToAll(typingUpdate); }
+  if (roomId) { await broadcastToRoom(roomId, typingUpdate); } else { broadcastToAll(typingUpdate); }
 });
 
 // Delete message handler
@@ -612,7 +636,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.DELETE_MESSAGE, async (ws, userId, payload)
   };
 
   if (message.roomId) {
-    broadcastToRoom(message.roomId, deleteBroadcast);
+    await broadcastToRoom(message.roomId, deleteBroadcast);
   } else {
     broadcastToAll(deleteBroadcast);
   }
@@ -691,7 +715,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.ADD_REACTION, async (ws, userId, payload) =
   };
 
   if (message.roomId) {
-    broadcastToRoom(message.roomId, update);
+    await broadcastToRoom(message.roomId, update);
   } else {
     broadcastToAll(update);
   }
@@ -725,7 +749,7 @@ messageHandlers.set(WS_MESSAGE_TYPES.REMOVE_REACTION, async (ws, userId, payload
   };
 
   if (message.roomId) {
-    broadcastToRoom(message.roomId, update);
+    await broadcastToRoom(message.roomId, update);
   } else {
     broadcastToAll(update);
   }
@@ -752,9 +776,33 @@ function broadcastToAll(message: any, excludeUserId?: string) {
   });
 }
 
-function broadcastToRoom(roomId: string, message: any, excludeUserId?: string) {
-  const room = rooms.get(roomId);
+async function broadcastToRoom(roomId: string, message: any, excludeUserId?: string) {
+  let room = rooms.get(roomId);
+  if (!room) {
+    try {
+      const roomData = await redis.get(REDIS_KEYS.room(roomId));
+      if (roomData) {
+        const parsed = JSON.parse(roomData);
+        const restoredRoom: ServerRoom = {
+          ...parsed,
+          participants: new Set(parsed.participants || []),
+        };
+        room = restoredRoom;
+        rooms.set(roomId, restoredRoom);
+      }
+    } catch (e) {
+      console.error('[broadcastToRoom] Error fetching room from redis:', e);
+    }
+  }
   if (!room) return;
+
+  // Ensure all active connected users currently in this room are included
+  users.forEach((u) => {
+    if (u.currentRoom === roomId) {
+      room!.participants.add(u.id);
+    }
+  });
+
   const messageStr = JSON.stringify(message);
   room.participants.forEach(userId => {
     if (userId !== excludeUserId) {
@@ -782,7 +830,7 @@ async function leaveRoom(userId: string, roomId: string) {
       JSON.stringify({ ...room, participants: Array.from(room.participants) })
     );
     await redis.srem(REDIS_KEYS.roomParticipants(roomId), userId);
-    broadcastToRoom(roomId, {
+    await broadcastToRoom(roomId, {
       type: WS_MESSAGE_TYPES.USER_LEFT,
       payload: {
         user: { id: userId, username: user.username },
@@ -901,20 +949,18 @@ wss.on('connection', (ws: any) => {
 
     if (id) {
       const user = users.get(id);
-      clients.delete(id);
+
+      // Only delete from clients map if the active socket for this user is still THIS closing socket.
+      // If the user already reconnected, clients.get(id) will hold their NEW active socket!
+      const isCurrentSocket = clients.get(id) === ws;
+      if (isCurrentSocket) {
+        clients.delete(id);
+      }
 
       if (user) {
-        // ─── GRACE PERIOD: Keep user in memory for session recovery ─────────
-        // On Android, opening the file picker kills the TCP socket. The client
-        // will reconnect in ~3 seconds and attempt session recovery via
-        // sessionId. If we delete the user NOW, the AUTH handler can't find
-        // them and they lose their identity, messages, and room membership.
-        //
-        // Instead: remove from active tracking, but keep the user object alive
-        // for 2 minutes. If they reconnect within that window, the AUTH
-        // handler reuses their identity seamlessly. If they don't, this
-        // timer cleans them up.
-        globalUsers.delete(id);
+        if (isCurrentSocket) {
+          globalUsers.delete(id);
+        }
 
         const _gracePeriod = setTimeout(() => {
           // If the user reconnected, clients.has(id) will be true again
@@ -1246,6 +1292,32 @@ app.post('/api/upload', upload.single('file'), async (req: express.Request, res:
   }
 });
 
+async function findUserBySessionId(sessionId: string): Promise<ServerUser | undefined> {
+  for (const u of users.values()) {
+    if (u.sessionId === sessionId) return u;
+  }
+  try {
+    let cursor = '0';
+    do {
+      const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'user:*', 'COUNT', 50);
+      cursor = nextCursor;
+      for (const key of keys) {
+        const uData = await redis.get(key);
+        if (uData) {
+          const parsed = JSON.parse(uData);
+          if (parsed.sessionId === sessionId) {
+            users.set(parsed.id, parsed);
+            return parsed;
+          }
+        }
+      }
+    } while (cursor !== '0');
+  } catch (err) {
+    console.warn('Error querying Redis for user session:', err);
+  }
+  return undefined;
+}
+
 // ─── Direct Cloudinary Upload: Signature endpoint ─────────────────────────────
 // Client calls this to get signed Cloudinary params, then uploads directly
 // to Cloudinary — eliminates the double-hop through our server.
@@ -1269,10 +1341,7 @@ app.post('/api/upload/sign', async (req: express.Request, res: express.Response)
     const { sessionId } = req.body;
     if (!sessionId) return res.status(401).json({ error: 'Not authenticated' });
 
-    let user: ServerUser | undefined;
-    for (const u of users.values()) {
-      if (u.sessionId === sessionId) { user = u; break; }
-    }
+    const user = await findUserBySessionId(sessionId);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
     // Generate Cloudinary signature
@@ -1320,10 +1389,7 @@ app.post('/api/upload/confirm', async (req: express.Request, res: express.Respon
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    let user: ServerUser | undefined;
-    for (const u of users.values()) {
-      if (u.sessionId === sessionId) { user = u; break; }
-    }
+    const user = await findUserBySessionId(sessionId);
     if (!user) return res.status(401).json({ error: 'User not found' });
 
     const timestamp = Date.now();
