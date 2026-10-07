@@ -7,6 +7,7 @@ export interface ServerUser {
   socketId: string;
   joinedAt: number;
   currentRoom?: string;
+  rooms?: string[];
 }
 
 export interface ServerMessage {

@@ -39,6 +39,7 @@ export interface Room {
   code: string;
   name?: string;
   pin?: string;
+  hasPin?: boolean;
   createdAt: number;
   expiresAt: number;
   participants: string[];
@@ -50,6 +51,7 @@ export interface ChatState {
   currentUser: User | null;
   connected: boolean;
   currentRoom: Room | null;
+  joinedRooms: Room[];
   typingUsers: string[];
 }
 

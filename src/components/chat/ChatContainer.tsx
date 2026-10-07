@@ -22,6 +22,8 @@ export function ChatContainer() {
     currentUser,
     messages,
     currentRoom,
+    joinedRooms,
+    unreadCounts,
     activeSpace,
     switchSpace,
     roomParticipants,
@@ -134,7 +136,7 @@ export function ChatContainer() {
       {/* Drag & Drop Visual Overlay */}
       <FileDropOverlay
         isVisible={isDraggingFile}
-        targetName={activeSpace === 'room' && currentRoom ? (currentRoom.name || `Room ${currentRoom.code}`) : 'Global Chat'}
+        targetName={activeSpace !== 'global' && currentRoom ? (currentRoom.name || `Room ${currentRoom.code}`) : 'Global Chat'}
         onDrop={processDroppedFiles}
         onClose={() => {
           dragCounterRef.current = 0;
@@ -145,11 +147,13 @@ export function ChatContainer() {
       {/* Room Manager */}
       <RoomManager
         currentRoom={currentRoom}
+        joinedRooms={joinedRooms}
         activeSpace={activeSpace}
         onSwitchSpace={switchSpace}
         onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
         onLeaveRoom={leaveRoom}
+        unreadCounts={unreadCounts}
       />
 
       {/* Chat Header - Hidden on mobile to save space, visible on large screens */}
@@ -157,9 +161,9 @@ export function ChatContainer() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Users className="w-4 h-4" />
-            <span>{activeSpace === 'room' && currentRoom ? `${roomParticipants.length} online` : 'Global online'}</span>
+            <span>{activeSpace !== 'global' && currentRoom ? `${roomParticipants.length} online` : 'Global online'}</span>
           </div>
-          {activeSpace === 'room' && currentRoom && (
+          {activeSpace !== 'global' && currentRoom && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Clock className="w-4 h-4" />
               <span>Expires in {getTimeRemaining(currentRoom.expiresAt)}</span>
@@ -184,10 +188,10 @@ export function ChatContainer() {
               <div className="flex flex-col items-center justify-center h-64 text-center">
                 <MessageSquare className="w-12 h-12 text-muted-foreground/50 mb-4" />
                 <p className="text-lg font-medium text-muted-foreground">
-                  {activeSpace === 'room' && currentRoom ? 'Room created!' : 'Welcome to Global Chat'}
+                  {activeSpace !== 'global' && currentRoom ? 'Room created!' : 'Welcome to Global Chat'}
                 </p>
                 <p className="text-sm text-muted-foreground max-w-md">
-                  {activeSpace === 'room' && currentRoom
+                  {activeSpace !== 'global' && currentRoom
                     ? 'Share the room code with others to start chatting privately. Messages expire in 12 hours.'
                     : 'Start chatting with everyone. Messages expire after 1 hour for privacy.'
                   }

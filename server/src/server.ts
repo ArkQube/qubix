@@ -294,9 +294,18 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
 
   globalUsers.add(userId);
 
-  // If user was already in a private room during disconnect/recovery, restore room scope
+  // ── Restore all rooms user belongs to during session recovery ───────────
+  const roomIdsToRestore = new Set<string>();
+  if (Array.isArray(user.rooms)) {
+    user.rooms.forEach(rid => roomIdsToRestore.add(rid));
+  }
   if (user.currentRoom) {
-    const roomId = user.currentRoom;
+    roomIdsToRestore.add(user.currentRoom);
+  }
+
+  const validRooms: string[] = [];
+
+  for (const roomId of roomIdsToRestore) {
     if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Set());
     roomUsers.get(roomId)!.add(userId);
 
@@ -318,8 +327,9 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
       }
     }
 
-    if (room) {
+    if (room && room.expiresAt > Date.now()) {
       room.participants.add(userId);
+      validRooms.push(roomId);
 
       const participantUsers: Array<{ id: string; username: string }> = [];
       for (const pid of room.participants) {
@@ -347,15 +357,19 @@ messageHandlers.set(WS_MESSAGE_TYPES.AUTH, async (ws, _, payload) => {
         type: WS_MESSAGE_TYPES.MESSAGE_HISTORY,
         payload: { messages: roomMessages, roomId },
       });
-    } else {
-      user.currentRoom = undefined;
-      await redis.setex(
-        REDIS_KEYS.user(userId),
-        EXPIRATION_TIMES.user,
-        JSON.stringify(user)
-      );
     }
   }
+
+  user.rooms = validRooms;
+  if (user.currentRoom && !validRooms.includes(user.currentRoom)) {
+    user.currentRoom = validRooms[0] || undefined;
+  }
+
+  await redis.setex(
+    REDIS_KEYS.user(userId),
+    EXPIRATION_TIMES.user,
+    JSON.stringify(user)
+  );
 
   // Always send global messages history so Global Chat is instantly accessible
   const globalMessages = await getGlobalMessages();
@@ -492,6 +506,8 @@ messageHandlers.set(WS_MESSAGE_TYPES.CREATE_ROOM, async (ws, userId, payload) =>
   );
 
   user.currentRoom = roomId;
+  if (!user.rooms) user.rooms = [];
+  if (!user.rooms.includes(roomId)) user.rooms.push(roomId);
 
   await redis.setex(
     REDIS_KEYS.user(userId),
@@ -566,13 +582,11 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
   if (!room) { sendError(ws, 'Room not found'); return; }
   if (room.pin && room.pin !== pin) { sendError(ws, 'Invalid PIN'); return; }
 
-  if (user.currentRoom && user.currentRoom !== room.id) {
-    await leaveRoom(userId, user.currentRoom);
-  }
-
   const isNewParticipant = !room.participants.has(userId);
   room.participants.add(userId);
   user.currentRoom = room.id;
+  if (!user.rooms) user.rooms = [];
+  if (!user.rooms.includes(room.id)) user.rooms.push(room.id);
 
   if (!roomUsers.has(room.id)) roomUsers.set(room.id, new Set());
   roomUsers.get(room.id)!.add(userId);
@@ -641,9 +655,11 @@ messageHandlers.set(WS_MESSAGE_TYPES.JOIN_ROOM, async (ws, userId, payload) => {
 // Leave room handler
 messageHandlers.set(WS_MESSAGE_TYPES.LEAVE_ROOM, async (ws, userId, payload) => {
   const user = users.get(userId);
-  if (!user || !user.currentRoom) { sendError(ws, 'Not in a room'); return; }
+  if (!user) { sendError(ws, 'User not authenticated'); return; }
 
-  const roomId = user.currentRoom; // Save before leaveRoom() clears it
+  const roomId = payload?.roomId || user.currentRoom;
+  if (!roomId) { sendError(ws, 'Not in a room'); return; }
+
   await leaveRoom(userId, roomId);
   sendToClient(ws, {
     type: WS_MESSAGE_TYPES.ROOM_LEFT,
@@ -879,7 +895,7 @@ async function broadcastToRoom(roomId: string, message: any, excludeUserId?: str
 
   // Ensure all active connected users currently in this room are included
   users.forEach((u) => {
-    if (u.currentRoom === roomId) {
+    if (u.currentRoom === roomId || (u.rooms && u.rooms.includes(roomId))) {
       room!.participants.add(u.id);
     }
   });
@@ -916,7 +932,12 @@ async function leaveRoom(userId: string, roomId: string) {
 
   room.participants.delete(userId);
   if (user) {
-    user.currentRoom = undefined;
+    if (user.rooms) {
+      user.rooms = user.rooms.filter(id => id !== roomId);
+    }
+    if (user.currentRoom === roomId) {
+      user.currentRoom = user.rooms && user.rooms.length > 0 ? user.rooms[0] : undefined;
+    }
     await redis.setex(
       REDIS_KEYS.user(userId),
       EXPIRATION_TIMES.user,

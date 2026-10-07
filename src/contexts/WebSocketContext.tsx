@@ -3,6 +3,11 @@ import type { User, Message, Room, UploadProgress } from '@/types';
 import { DEFAULT_CONFIG } from '@/types';
 import { generateSessionId, generateAnonymousUsername } from '@/lib/utils';
 
+export interface StoredRoomEntry {
+  room: Room;
+  pin?: string;
+}
+
 interface WebSocketContextType {
   connected: boolean;
   connecting: boolean;
@@ -10,17 +15,20 @@ interface WebSocketContextType {
   currentUser: User | null;
   messages: Message[];
   currentRoom: Room | null;
-  activeSpace: 'global' | 'room';
-  switchSpace: (space: 'global' | 'room') => void;
+  joinedRooms: Room[];
+  activeSpace: string; // 'global' or roomId
+  switchSpace: (space: string) => void;
   roomParticipants: User[];
+  allRoomParticipants: Record<string, User[]>;
   typingUsers: string[];
+  unreadCounts: Record<string, number>;
   uploadProgress: UploadProgress | null;
   connect: () => void;
   disconnect: () => void;
   sendMessage: (content: string, fileData?: any) => void;
   createRoom: (name?: string, pin?: string) => void;
   joinRoom: (code: string, pin?: string) => void;
-  leaveRoom: () => void;
+  leaveRoom: (roomId?: string) => void;
   sendTyping: (isTyping: boolean) => void;
   deleteMessage: (messageId: string) => void;
   addReaction: (messageId: string, emoji: string) => void;
@@ -38,6 +46,40 @@ interface WebSocketContextType {
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
 
+// Helper to load persisted rooms on boot/refresh
+const getInitialJoinedRooms = (): StoredRoomEntry[] => {
+  try {
+    let list: StoredRoomEntry[] = [];
+    const stored = localStorage.getItem('arkion_joined_rooms');
+    if (stored) {
+      try {
+        list = JSON.parse(stored);
+      } catch {}
+    }
+
+    // Also migrate legacy single room if exists and not already in list
+    const legacy = localStorage.getItem('arkion_current_room');
+    if (legacy) {
+      try {
+        const parsed = JSON.parse(legacy);
+        if (parsed?.room?.id && !list.some(item => item.room?.id === parsed.room.id)) {
+          list.push(parsed);
+        }
+      } catch {}
+    }
+
+    const now = Date.now();
+    // Filter out expired rooms
+    const active = list.filter(item => item.room?.expiresAt && item.room.expiresAt > now);
+    if (active.length !== list.length) {
+      localStorage.setItem('arkion_joined_rooms', JSON.stringify(active));
+    }
+    return active;
+  } catch {
+    return [];
+  }
+};
+
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -49,44 +91,51 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Helper to load persisted room on boot/refresh
-  const getInitialRoom = (): { room: Room | null; pin?: string } => {
+
+  const initialEntries = useRef<StoredRoomEntry[]>(getInitialJoinedRooms());
+  const cachedRoomPins = useRef<Record<string, string>>({});
+  const lastCreatedPin = useRef<string | undefined>(undefined);
+  const targetJoiningRoomCode = useRef<string | null>(null);
+
+  initialEntries.current.forEach(e => {
+    if (e.pin && e.room?.code) cachedRoomPins.current[e.room.code.toUpperCase()] = e.pin;
+  });
+
+  const [joinedRooms, setJoinedRooms] = useState<Room[]>(
+    initialEntries.current.map(e => e.room).filter(Boolean)
+  );
+  const joinedRoomsRef = useRef<Room[]>(joinedRooms);
+
+  // Sync joinedRooms ref and localStorage
+  useEffect(() => {
+    joinedRoomsRef.current = joinedRooms;
     try {
-      let stored = localStorage.getItem('arkion_current_room');
-      if (!stored) {
-        stored = sessionStorage.getItem('arkion_current_room');
-        if (stored) {
-          localStorage.setItem('arkion_current_room', stored);
-          sessionStorage.removeItem('arkion_current_room');
-        }
-      }
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed?.room?.expiresAt && Date.now() > parsed.room.expiresAt) {
-          localStorage.removeItem('arkion_current_room');
-          return { room: null };
-        }
-        return parsed;
-      }
+      const stored = localStorage.getItem('arkion_joined_rooms');
+      const existing: StoredRoomEntry[] = stored ? JSON.parse(stored) : [];
+      const updated: StoredRoomEntry[] = joinedRooms.map(r => {
+        const found = existing.find(e => e.room?.id === r.id);
+        return {
+          room: r,
+          pin: found?.pin || cachedRoomPins.current[r.code.toUpperCase()]
+        };
+      });
+      localStorage.setItem('arkion_joined_rooms', JSON.stringify(updated));
     } catch {}
-    return { room: null };
-  };
+  }, [joinedRooms]);
 
-  const initialRoomData = useRef(getInitialRoom());
-
-  const getInitialSpace = (): 'global' | 'room' => {
+  const getInitialSpace = (): string => {
     try {
       const savedSpace = localStorage.getItem('arkion_active_space');
-      if (savedSpace === 'global' || savedSpace === 'room') {
-        if (savedSpace === 'room' && !initialRoomData.current.room) return 'global';
+      if (savedSpace === 'global') return 'global';
+      if (savedSpace && joinedRoomsRef.current.some(r => r.id === savedSpace)) {
         return savedSpace;
       }
     } catch {}
-    return initialRoomData.current.room ? 'room' : 'global';
+    return 'global';
   };
 
-  const [activeSpace, setActiveSpace] = useState<'global' | 'room'>(getInitialSpace());
-  const activeSpaceRef = useRef<'global' | 'room'>(activeSpace);
+  const [activeSpace, setActiveSpace] = useState<string>(getInitialSpace());
+  const activeSpaceRef = useRef<string>(activeSpace);
 
   useEffect(() => {
     activeSpaceRef.current = activeSpace;
@@ -95,28 +144,31 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, [activeSpace]);
 
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [globalMessages, setGlobalMessages] = useState<Message[]>([]);
-  const [roomMessages, setRoomMessages] = useState<Message[]>([]);
-  const messages = activeSpace === 'room' ? roomMessages : globalMessages;
-  const [currentRoom, setCurrentRoom] = useState<Room | null>(initialRoomData.current.room);
-  const [roomParticipants, setRoomParticipants] = useState<User[]>([]);
-  const [typingUsers, setTypingUsers] = useState<string[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
-
-  // When true, onclose suppresses the "Connection Lost" UI and silently reconnects.
-  // Set by ChatInput when the file picker is open (Android kills the socket).
-  const suppressDisconnectUI = useRef(false);
-
-  // ─── Ref sync: keep refs that always reflect the latest state ──────────────
-  const currentRoomRef = useRef<Room | null>(initialRoomData.current.room);
-  const currentRoomPinRef = useRef<string | undefined>(initialRoomData.current.pin);
-  const currentUserRef = useRef<User | null>(null);
-  const pendingMessages = useRef<any[]>([]);
+  // Current active room (or null if in global chat)
+  const currentRoom = activeSpace === 'global' ? null : (joinedRooms.find(r => r.id === activeSpace) || null);
+  const currentRoomRef = useRef<Room | null>(currentRoom);
 
   useEffect(() => {
     currentRoomRef.current = currentRoom;
   }, [currentRoom]);
+
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [globalMessages, setGlobalMessages] = useState<Message[]>([]);
+  const [roomMessages, setRoomMessages] = useState<Record<string, Message[]>>({});
+  const messages = activeSpace === 'global' ? globalMessages : (roomMessages[activeSpace] || []);
+
+  const [allRoomParticipants, setAllRoomParticipants] = useState<Record<string, User[]>>({});
+  const roomParticipants = activeSpace === 'global' ? [] : (allRoomParticipants[activeSpace] || []);
+
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+
+  // When true, onclose suppresses the "Connection Lost" UI and silently reconnects.
+  const suppressDisconnectUI = useRef(false);
+
+  const currentUserRef = useRef<User | null>(null);
+  const pendingMessages = useRef<any[]>([]);
 
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -127,7 +179,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('arkion_session_id', sessionId.current);
   }, []);
 
-  // Auto-remove expired messages
+  // Auto-remove expired messages and rooms
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
@@ -136,8 +188,25 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         return active.length !== prev.length ? active : prev;
       });
       setRoomMessages(prev => {
-        const active = prev.filter(m => m.expiresAt > now);
-        return active.length !== prev.length ? active : prev;
+        let changed = false;
+        const next: Record<string, Message[]> = {};
+        for (const [rid, msgs] of Object.entries(prev)) {
+          const active = msgs.filter(m => m.expiresAt > now);
+          if (active.length !== msgs.length) changed = true;
+          next[rid] = active;
+        }
+        return changed ? next : prev;
+      });
+      setJoinedRooms(prev => {
+        const active = prev.filter(r => r.expiresAt > now);
+        if (active.length !== prev.length) {
+          // If active space was in expired room, switch to global
+          if (activeSpaceRef.current !== 'global' && !active.some(r => r.id === activeSpaceRef.current)) {
+            setActiveSpace('global');
+          }
+          return active;
+        }
+        return prev;
       });
     }, 10_000);
     return () => clearInterval(interval);
@@ -150,8 +219,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       const queue = [...pendingMessages.current];
       pendingMessages.current = [];
       queue.forEach(msg => {
-        if (msg.type === 'send_message' && !msg.payload?.roomId && activeSpaceRef.current === 'room' && currentRoomRef.current?.id) {
-          msg.payload.roomId = currentRoomRef.current.id;
+        if (msg.type === 'send_message' && !msg.payload?.roomId && activeSpaceRef.current !== 'global') {
+          msg.payload.roomId = activeSpaceRef.current;
         }
         ws.current?.send(JSON.stringify(msg));
       });
@@ -175,28 +244,35 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       case 'auth_success': {
         setCurrentUser(payload.user);
         currentUserRef.current = payload.user;
-        setError(null); // Wipe out any transient handshake errors
+        setError(null);
         localStorage.setItem('arkion_username', payload.user.username);
 
+        // Check if there's a room parameter in the URL
         const urlParams = new URLSearchParams(window.location.search);
         const urlRoomCode = urlParams.get('room');
-        if (urlRoomCode && (!currentRoomRef.current || currentRoomRef.current.code !== urlRoomCode.toUpperCase())) {
+        if (urlRoomCode) {
+          const upper = urlRoomCode.toUpperCase();
+          targetJoiningRoomCode.current = upper;
           sendRaw({
             type: 'join_room',
-            payload: {
-              code: urlRoomCode.toUpperCase(),
-            },
-          });
-        } else if (currentRoomRef.current) {
-          // If the user was in a private room but reopened tab or socket dropped, automatically pull them back in
-          sendRaw({
-            type: 'join_room',
-            payload: {
-              code: currentRoomRef.current.code,
-              pin: currentRoomPinRef.current // Use the strictly cached plain-text PIN
-            }
+            payload: { code: upper },
           });
         }
+
+        // Rejoin all currently enrolled rooms
+        initialEntries.current.forEach(entry => {
+          if (entry.room?.code) {
+            const cachedPin = entry.pin || cachedRoomPins.current[entry.room.code.toUpperCase()];
+            sendRaw({
+              type: 'join_room',
+              payload: {
+                code: entry.room.code,
+                pin: cachedPin
+              }
+            });
+          }
+        });
+
         flushPendingMessages();
         break;
       }
@@ -231,8 +307,19 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
         if (incomingRoomId === 'global') {
           setGlobalMessages(updateList);
-        } else if (currentRoomRef.current && incomingRoomId === currentRoomRef.current.id) {
-          setRoomMessages(updateList);
+        } else {
+          setRoomMessages(prev => ({
+            ...prev,
+            [incomingRoomId]: updateList(prev[incomingRoomId] || [])
+          }));
+
+          // Track unread badge if message is for another room
+          if (activeSpaceRef.current !== incomingRoomId) {
+            setUnreadCounts(prev => ({
+              ...prev,
+              [incomingRoomId]: (prev[incomingRoomId] || 0) + 1
+            }));
+          }
         }
         break;
       }
@@ -248,8 +335,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
         if (historyRoomId === 'global') {
           setGlobalMessages(mergeHistory);
-        } else if (currentRoomRef.current && historyRoomId === currentRoomRef.current.id) {
-          setRoomMessages(mergeHistory);
+        } else {
+          setRoomMessages(prev => ({
+            ...prev,
+            [historyRoomId]: mergeHistory(prev[historyRoomId] || [])
+          }));
         }
         break;
       }
@@ -259,12 +349,18 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
         if (msgRoomId === 'global') {
           if (payload.message) setGlobalMessages(prev => [...prev, payload.message].slice(-100));
-        } else if (currentRoomRef.current && msgRoomId === currentRoomRef.current.id) {
-          if (payload.message) setRoomMessages(prev => [...prev, payload.message].slice(-100));
+        } else {
+          if (payload.message) {
+            setRoomMessages(prev => ({
+              ...prev,
+              [msgRoomId]: [...(prev[msgRoomId] || []), payload.message].slice(-100)
+            }));
+          }
           if (payload.user) {
-            setRoomParticipants(prev => {
-              if (prev.some(p => p.id === payload.user.id)) return prev;
-              return [...prev, payload.user];
+            setAllRoomParticipants(prev => {
+              const current = prev[msgRoomId] || [];
+              if (current.some(p => p.id === payload.user.id)) return prev;
+              return { ...prev, [msgRoomId]: [...current, payload.user] };
             });
           }
         }
@@ -276,10 +372,18 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
         if (msgRoomId === 'global') {
           if (payload.message) setGlobalMessages(prev => [...prev, payload.message].slice(-100));
-        } else if (currentRoomRef.current && msgRoomId === currentRoomRef.current.id) {
-          if (payload.message) setRoomMessages(prev => [...prev, payload.message].slice(-100));
+        } else {
+          if (payload.message) {
+            setRoomMessages(prev => ({
+              ...prev,
+              [msgRoomId]: [...(prev[msgRoomId] || []), payload.message].slice(-100)
+            }));
+          }
           if (payload.user) {
-            setRoomParticipants(prev => prev.filter(p => p.id !== payload.user.id));
+            setAllRoomParticipants(prev => {
+              const current = prev[msgRoomId] || [];
+              return { ...prev, [msgRoomId]: current.filter(p => p.id !== payload.user.id) };
+            });
           }
         }
         break;
@@ -287,76 +391,95 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       case 'typing_update': {
         const targetRoomId = payload.roomId || 'global';
-        const currentSpaceId = activeSpaceRef.current === 'room' && currentRoomRef.current ? currentRoomRef.current.id : 'global';
+        const currentSpaceId = activeSpaceRef.current !== 'global' ? activeSpaceRef.current : 'global';
         if (targetRoomId !== currentSpaceId) break;
 
         setTypingUsers(payload.typingUsers || []);
         break;
       }
 
-      case 'room_created':
-        currentRoomRef.current = payload.room;
-        try {
-          localStorage.setItem('arkion_current_room', JSON.stringify({
-            room: payload.room,
-            pin: currentRoomPinRef.current
-          }));
-        } catch {}
-        setCurrentRoom(payload.room);
-        setActiveSpace('room');
-        setRoomMessages([]);
-        setRoomParticipants([]);
+      case 'room_created': {
+        const newRoom: Room = payload.room;
+        if (lastCreatedPin.current && newRoom.code) {
+          cachedRoomPins.current[newRoom.code.toUpperCase()] = lastCreatedPin.current;
+        }
+
+        setJoinedRooms(prev => {
+          const filtered = prev.filter(r => r.id !== newRoom.id);
+          return [newRoom, ...filtered];
+        });
+        setActiveSpace(newRoom.id);
+        setRoomMessages(prev => ({ ...prev, [newRoom.id]: [] }));
+        setAllRoomParticipants(prev => ({
+          ...prev,
+          [newRoom.id]: currentUserRef.current ? [currentUserRef.current] : []
+        }));
         flushPendingMessages();
         break;
+      }
 
-      case 'room_joined':
-        currentRoomRef.current = payload.room;
-        try {
-          localStorage.setItem('arkion_current_room', JSON.stringify({
-            room: payload.room,
-            pin: currentRoomPinRef.current
-          }));
-        } catch {}
-        setCurrentRoom(payload.room);
-        setActiveSpace('room');
-        // Preserve any in-flight uploading file messages
-        setRoomMessages(prev => prev.filter(m => m.status === 'sending'));
-        setRoomParticipants(payload.participants || []);
+      case 'room_joined': {
+        const joinedRoom: Room = payload.room;
+        setJoinedRooms(prev => {
+          const filtered = prev.filter(r => r.id !== joinedRoom.id);
+          return [...filtered, joinedRoom];
+        });
+
+        // If this was an explicit user join action, switch to it immediately
+        if (targetJoiningRoomCode.current === joinedRoom.code.toUpperCase()) {
+          setActiveSpace(joinedRoom.id);
+          targetJoiningRoomCode.current = null;
+        } else if (activeSpaceRef.current === joinedRoom.id) {
+          // already selected
+        }
+
+        setAllRoomParticipants(prev => ({
+          ...prev,
+          [joinedRoom.id]: payload.participants || []
+        }));
         flushPendingMessages();
         break;
+      }
 
-      case 'room_left':
-        currentRoomRef.current = null;
-        currentRoomPinRef.current = undefined;
-        try { localStorage.removeItem('arkion_current_room'); } catch {}
-        try { sessionStorage.removeItem('arkion_current_room'); } catch {}
-        setCurrentRoom(null);
-        setActiveSpace('global');
-        setRoomMessages([]);
-        setRoomParticipants([]);
-        setTypingUsers([]);
+      case 'room_left': {
+        const leftRoomId: string = payload.roomId;
+        setJoinedRooms(prev => prev.filter(r => r.id !== leftRoomId));
+        if (activeSpaceRef.current === leftRoomId) {
+          setActiveSpace('global');
+        }
+        setRoomMessages(prev => {
+          const next = { ...prev };
+          delete next[leftRoomId];
+          return next;
+        });
+        setAllRoomParticipants(prev => {
+          const next = { ...prev };
+          delete next[leftRoomId];
+          return next;
+        });
         break;
+      }
 
-      case 'room_error':
+      case 'room_error': {
         setError(payload.error);
         if (payload.error === 'Room not found' || payload.error === 'Invalid PIN') {
-          currentRoomRef.current = null;
-          currentRoomPinRef.current = undefined;
-          try { localStorage.removeItem('arkion_current_room'); } catch {}
-          try { sessionStorage.removeItem('arkion_current_room'); } catch {}
-          setCurrentRoom(null);
-          setActiveSpace('global');
-          setRoomMessages([]);
-          setRoomParticipants([]);
+          // Remove invalid room from cache if it failed
+          if (targetJoiningRoomCode.current) {
+            targetJoiningRoomCode.current = null;
+          }
         }
         break;
+      }
 
       case 'delete_message': {
         const targetRoomId = payload.roomId || 'global';
         if (targetRoomId === 'global') {
           setGlobalMessages(prev => prev.filter(m => m.id !== payload.messageId));
         } else {
-          setRoomMessages(prev => prev.filter(m => m.id !== payload.messageId));
+          setRoomMessages(prev => ({
+            ...prev,
+            [targetRoomId]: (prev[targetRoomId] || []).filter(m => m.id !== payload.messageId)
+          }));
         }
         break;
       }
@@ -369,7 +492,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         if (!targetRoomId || targetRoomId === 'global') {
           setGlobalMessages(updateReaction);
         } else {
-          setRoomMessages(updateReaction);
+          setRoomMessages(prev => ({
+            ...prev,
+            [targetRoomId]: updateReaction(prev[targetRoomId] || [])
+          }));
         }
         break;
       }
@@ -392,8 +518,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       default:
         console.log('Unknown message type:', type, payload);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // ← intentionally no deps — we use refs for live values
+  }, [flushPendingMessages, sendRaw]);
 
   // ─── Connect ─────────────────────────────────────────────────────────────────
   const connect = useCallback(() => {
@@ -402,7 +527,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
     const isSuppressed = suppressDisconnectUI.current;
 
-    // Only show "Connecting..." spinner for non-suppressed connections
     if (!isSuppressed) {
       setConnecting(true);
     }
@@ -420,10 +544,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         setConnecting(false);
         setError(null);
 
-        // Only wipe messages/participants on FRESH connections if not in a private room.
-        if (!isSuppressed && !currentRoomRef.current) {
+        if (!isSuppressed && joinedRoomsRef.current.length === 0) {
           setGlobalMessages([]);
-          setRoomParticipants([]);
           setTypingUsers([]);
         }
 
@@ -439,7 +561,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         if (pingInterval.current) clearInterval(pingInterval.current);
         pingInterval.current = setInterval(() => {
           sendRaw({ type: 'ping', payload: {} });
-        }, 20_000); // 20s for faster dead-socket detection on mobile focus recovery
+        }, 20_000);
       };
 
       ws.current.onmessage = (event) => {
@@ -460,17 +582,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (suppressDisconnectUI.current) {
-          // File picker is active — Android killed the socket but we don't
-          // want the user to see "Connection Lost". Reconnect instantly
-          // and silently in the background.
           console.log('[WS] Suppressed disconnect UI (file picker active). Reconnecting instantly...');
           ws.current = null;
-          // Don't touch connected/connecting state — keep UI stable
           if (!reconnectTimeout.current) {
             reconnectTimeout.current = setTimeout(() => {
               reconnectTimeout.current = null;
               connect();
-            }, 100); // near-instant
+            }, 100);
           }
         } else {
           setConnected(false);
@@ -514,21 +632,36 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ─── Public actions ───────────────────────────────────────────────────────────
-  const switchSpace = useCallback((space: 'global' | 'room') => {
-    if (space === 'room' && !currentRoomRef.current) return;
-    setActiveSpace(space);
-    activeSpaceRef.current = space;
+  const switchSpace = useCallback((space: string) => {
+    let target = space;
+    if (target !== 'global') {
+      // Support legacy 'room' string
+      if (target === 'room') {
+        if (joinedRoomsRef.current.length > 0) {
+          target = joinedRoomsRef.current[0].id;
+        } else {
+          target = 'global';
+        }
+      } else if (!joinedRoomsRef.current.some(r => r.id === target)) {
+        target = 'global';
+      }
+    }
+
+    setActiveSpace(target);
+    activeSpaceRef.current = target;
     setTypingUsers([]);
 
-    if (space === 'global') {
+    if (target !== 'global') {
+      // Clear unread badge
+      setUnreadCounts(prev => ({ ...prev, [target]: 0 }));
+      sendRaw({
+        type: 'get_history',
+        payload: { roomId: target },
+      });
+    } else {
       sendRaw({
         type: 'get_history',
         payload: { roomId: undefined },
-      });
-    } else if (space === 'room' && currentRoomRef.current) {
-      sendRaw({
-        type: 'get_history',
-        payload: { roomId: currentRoomRef.current.id },
       });
     }
   }, [sendRaw]);
@@ -536,7 +669,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const sendChatMessage = useCallback((content: string, fileData?: any, _ghostId?: string) => {
     if (!content.trim() && !fileData) return;
 
-    const targetRoomId = activeSpaceRef.current === 'room' ? currentRoomRef.current?.id : undefined;
+    const targetRoomId = activeSpaceRef.current !== 'global' ? activeSpaceRef.current : undefined;
 
     sendRaw({
       type: 'send_message',
@@ -550,31 +683,58 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }, [sendRaw]);
 
   const createRoom = useCallback((name?: string, pin?: string) => {
-    currentRoomPinRef.current = pin;
+    lastCreatedPin.current = pin;
     sendRaw({ type: 'create_room', payload: { name, pin } });
   }, [sendRaw]);
 
   const joinRoom = useCallback((code: string, pin?: string) => {
-    currentRoomPinRef.current = pin;
-    sendRaw({ type: 'join_room', payload: { code, pin } });
+    const upperCode = code.toUpperCase();
+    if (pin) {
+      cachedRoomPins.current[upperCode] = pin;
+    }
+    targetJoiningRoomCode.current = upperCode;
+    sendRaw({ type: 'join_room', payload: { code: upperCode, pin } });
   }, [sendRaw]);
 
-  const leaveRoom = useCallback(() => {
-    currentRoomRef.current = null;
-    currentRoomPinRef.current = undefined;
-    try { localStorage.removeItem('arkion_current_room'); } catch {}
-    try { sessionStorage.removeItem('arkion_current_room'); } catch {}
-    setCurrentRoom(null);
-    setActiveSpace('global');
-    setRoomMessages([]);
-    setRoomParticipants([]);
-    setTypingUsers([]);
-    sendRaw({ type: 'leave_room', payload: {} });
+  const leaveRoom = useCallback((targetRoomId?: string) => {
+    const rid = targetRoomId || (activeSpaceRef.current !== 'global' ? activeSpaceRef.current : undefined) || joinedRoomsRef.current[0]?.id;
+    if (!rid) return;
+
+    setJoinedRooms(prev => {
+      const updated = prev.filter(r => r.id !== rid);
+      try {
+        const stored = localStorage.getItem('arkion_joined_rooms');
+        if (stored) {
+          const list = JSON.parse(stored).filter((e: any) => e.room?.id !== rid);
+          localStorage.setItem('arkion_joined_rooms', JSON.stringify(list));
+        }
+      } catch {}
+      return updated;
+    });
+
+    if (activeSpaceRef.current === rid) {
+      setActiveSpace('global');
+      activeSpaceRef.current = 'global';
+    }
+
+    setRoomMessages(prev => {
+      const next = { ...prev };
+      delete next[rid];
+      return next;
+    });
+
+    setAllRoomParticipants(prev => {
+      const next = { ...prev };
+      delete next[rid];
+      return next;
+    });
+
+    sendRaw({ type: 'leave_room', payload: { roomId: rid } });
     sendRaw({ type: 'get_history', payload: { roomId: undefined } });
   }, [sendRaw]);
 
   const sendTyping = useCallback((isTyping: boolean) => {
-    const targetRoomId = activeSpaceRef.current === 'room' ? currentRoomRef.current?.id : undefined;
+    const targetRoomId = activeSpaceRef.current !== 'global' ? activeSpaceRef.current : undefined;
     sendRaw({
       type: 'typing',
       payload: { isTyping, roomId: targetRoomId },
@@ -596,7 +756,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const uploadFile = useCallback(async (file: File, uploadId?: string): Promise<any> => {
     const fileId = uploadId || `upload-${Date.now()}`;
     const previewUrl = URL.createObjectURL(file);
-    const targetRoomId = activeSpaceRef.current === 'room' ? (currentRoomRef.current?.id || 'global') : 'global';
+    const targetRoomId = activeSpaceRef.current !== 'global' ? activeSpaceRef.current : 'global';
 
     setUploadProgress({ fileId, progress: 0, status: 'uploading' });
 
@@ -626,12 +786,15 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       if (targetRoomId === 'global') {
         setGlobalMessages(prev => [...prev, ghostMessage]);
       } else {
-        setRoomMessages(prev => [...prev, ghostMessage]);
+        setRoomMessages(prev => ({
+          ...prev,
+          [targetRoomId]: [...(prev[targetRoomId] || []), ghostMessage]
+        }));
       }
     }
 
     try {
-      // ── Step 1: Get signed Cloudinary credentials from server ──────────────
+      // Step 1: Get signed Cloudinary credentials from server
       const signRes = await fetch(`${DEFAULT_CONFIG.apiUrl}/api/upload/sign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -645,15 +808,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       const { signature, timestamp, folder, access_mode, apiKey, cloudName } = await signRes.json();
 
-      // ── Step 2: Upload directly to Cloudinary (file travels once) ─────────
+      // Step 2: Upload directly to Cloudinary
       const cloudinaryFormData = new FormData();
       cloudinaryFormData.append('file', file);
       cloudinaryFormData.append('api_key', apiKey);
       cloudinaryFormData.append('timestamp', String(timestamp));
       cloudinaryFormData.append('signature', signature);
       cloudinaryFormData.append('folder', folder);
-      // access_mode:'public' must be sent so raw files are publicly accessible.
-      // It was part of the signed params, so it MUST also be in the form data.
       if (access_mode) cloudinaryFormData.append('access_mode', access_mode);
 
       const getResourceType = (mimeType: string) => {
@@ -663,14 +824,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       };
       const resourceType = getResourceType(file.type);
 
-      // Use XHR for real-time upload progress
       const cloudinaryResult = await new Promise<any>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`);
 
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
-            const pct = Math.round((e.loaded / e.total) * 90); // Reserve 10% for confirm
+            const pct = Math.round((e.loaded / e.total) * 90);
             setUploadProgress({ fileId, progress: pct, status: 'uploading' });
           }
         };
@@ -692,7 +852,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         xhr.send(cloudinaryFormData);
       });
 
-      // ── Step 3: Confirm metadata with server (for deletion/cleanup) ───────
+      // Step 3: Confirm metadata with server
       const confirmRes = await fetch(`${DEFAULT_CONFIG.apiUrl}/api/upload/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -722,7 +882,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       if (targetRoomId === 'global') {
         setGlobalMessages(prev => prev.filter(m => m.id !== fileId));
       } else {
-        setRoomMessages(prev => prev.filter(m => m.id !== fileId));
+        setRoomMessages(prev => ({
+          ...prev,
+          [targetRoomId]: (prev[targetRoomId] || []).filter(m => m.id !== fileId)
+        }));
       }
       throw err;
     }
@@ -749,34 +912,26 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     }
   }, [sendRaw]);
 
-  // Tell the server to skip heartbeat checks for this client (file picker open)
   const sendSuspend = useCallback(() => {
     sendRaw({ type: 'suspend', payload: {} });
   }, [sendRaw]);
 
-  // Tell the server to resume heartbeat checks for this client (file picker closed)
   const sendResume = useCallback(() => {
     sendRaw({ type: 'resume', payload: {} });
   }, [sendRaw]);
 
-  // Check the raw WebSocket readyState — bypasses stale React state
-  // Critical for Android: when the tab resumes from suspension, React's
-  // `connected` state might still say `true` because setState hasn't flushed.
   const isSocketAlive = useCallback((): boolean => {
     return ws.current?.readyState === WebSocket.OPEN;
   }, []);
 
   const forceReconnect = useCallback(() => {
     console.log('[WebSocketContext] Forcing reconnect (likely mobile resume)');
-    // Suppress the "Connection Lost" UI during this forced reconnect
     suppressDisconnectUI.current = true;
     if (ws.current) {
       ws.current.close();
       ws.current = null;
     }
-    // Don't set connected=false — keep UI stable during reconnect
     connect();
-    // Reset suppression after a short delay (connection should be established by then)
     setTimeout(() => { suppressDisconnectUI.current = false; }, 5000);
   }, [connect]);
 
@@ -786,7 +941,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     return () => { disconnect(); };
   }, [connect, disconnect]);
 
-  // ─── Visibility Reconnect ──────────────────────────────────────────────────
+  // Visibility Reconnect
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
@@ -806,10 +961,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     currentUser,
     messages,
     currentRoom,
+    joinedRooms,
     activeSpace,
     switchSpace,
     roomParticipants,
+    allRoomParticipants,
     typingUsers,
+    unreadCounts,
     uploadProgress,
     connect,
     disconnect,

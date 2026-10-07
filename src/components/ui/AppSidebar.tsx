@@ -7,8 +7,10 @@ import {
   Shield,
   Clock,
   Globe,
-  Lock
+  Lock,
+  Layers,
 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { DEFAULT_CONFIG } from '@/types';
 import { formatFileSize, getTimeRemaining } from '@/lib/utils';
@@ -20,7 +22,7 @@ interface SidebarProps {
 }
 
 export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
-  const { currentUser, connected, currentRoom, activeSpace, switchSpace } = useWebSocket();
+  const { currentUser, connected, joinedRooms, unreadCounts, activeSpace, switchSpace } = useWebSocket();
 
   const menuItems = [
     { id: 'chat', label: 'Chat', icon: MessageSquare },
@@ -83,37 +85,81 @@ export function AppSidebar({ activeTab, onTabChange }: SidebarProps) {
           })}
         </div>
 
-        {/* Current Room Info */}
-        {currentRoom && (
-          <div className="p-4 mt-4">
-            <button
-              onClick={() => {
-                switchSpace('room');
-                onTabChange('chat');
-              }}
-              className={`w-full text-left rounded-lg p-3 transition-colors border ${
-                activeSpace === 'room'
-                  ? 'bg-primary/10 border-primary/30 ring-1 ring-primary/20'
-                  : 'bg-primary/5 hover:bg-primary/10 border-transparent cursor-pointer'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-primary" />
-                  <span className="text-sm font-medium">Private Room</span>
+        {/* Joined Rooms Section */}
+        {joinedRooms.length > 0 && (
+          <div className="px-3 pt-3 pb-2">
+            <div className="flex items-center justify-between px-2 mb-2">
+              <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <Layers className="w-3 h-3" />
+                Joined Rooms ({joinedRooms.length})
+              </span>
+            </div>
+            <div className="space-y-1">
+              {/* Global Chat Item */}
+              <button
+                onClick={() => {
+                  switchSpace('global');
+                  onTabChange('chat');
+                }}
+                className={`w-full text-left rounded-md px-2.5 py-1.5 transition-colors flex items-center justify-between text-xs ${
+                  activeSpace === 'global' && activeTab === 'chat'
+                    ? 'bg-primary/10 text-primary font-medium border border-primary/20'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground border border-transparent cursor-pointer'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Globe className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="truncate">Global Chat</span>
                 </div>
-                {activeSpace === 'room' && (
-                  <span className="text-[10px] bg-primary/20 text-primary font-semibold px-1.5 py-0.5 rounded">
-                    Active
-                  </span>
-                )}
-              </div>
-              <p className="text-sm font-medium truncate">{currentRoom.name || `Room ${currentRoom.code}`}</p>
-              <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
-                <Clock className="w-3 h-3" />
-                <span>Expires in {getTimeRemaining(currentRoom.expiresAt)}</span>
-              </div>
-            </button>
+                {unreadCounts['global'] ? (
+                  <Badge variant="destructive" className="h-4 px-1 text-[10px] min-w-4 flex items-center justify-center">
+                    {unreadCounts['global']}
+                  </Badge>
+                ) : activeSpace === 'global' && activeTab === 'chat' ? (
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+                ) : null}
+              </button>
+
+              {/* Each Joined Room */}
+              {joinedRooms.map((room) => {
+                const isActive = activeSpace === room.id && activeTab === 'chat';
+                const unread = unreadCounts[room.id] || 0;
+                return (
+                  <button
+                    key={room.id}
+                    onClick={() => {
+                      switchSpace(room.id);
+                      onTabChange('chat');
+                    }}
+                    className={`w-full text-left rounded-md px-2.5 py-2 transition-colors border cursor-pointer ${
+                      isActive
+                        ? 'bg-primary/10 text-primary border-primary/30 ring-1 ring-primary/20'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground border-transparent'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1 mb-0.5">
+                      <div className="flex items-center gap-1.5 min-w-0 font-medium text-xs text-foreground truncate">
+                        <Lock className="w-3 h-3 text-primary flex-shrink-0" />
+                        <span className="truncate">{room.name || `Room ${room.code}`}</span>
+                      </div>
+                      {unread > 0 ? (
+                        <Badge variant="destructive" className="h-4 px-1 text-[10px] min-w-4 flex items-center justify-center">
+                          {unread}
+                        </Badge>
+                      ) : isActive ? (
+                        <span className="text-[9px] bg-primary/20 text-primary font-bold px-1 py-0.2 rounded">
+                          Active
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                      <span className="font-mono">{room.code}</span>
+                      <span>{getTimeRemaining(room.expiresAt)}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
       </ScrollArea>
