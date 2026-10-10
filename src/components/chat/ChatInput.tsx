@@ -51,7 +51,7 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeUploads = useRef(new Set<string>());
   const pickerOpenRef = useRef(false);
-  const { pausePing, resumePing, sendSuspend, sendResume, forceReconnect, suppressDisconnectUI } = useWebSocket();
+  const { connected, pausePing, resumePing, sendSuspend, sendResume, forceReconnect, suppressDisconnectUI } = useWebSocket();
   const { compressImages } = useImageCompression();
 
   // Preview URLs for staged images (cleaned up automatically when files change/unmount)
@@ -232,12 +232,15 @@ export function ChatInput({
 
     // If text message wasn't attached because all file uploads failed, send text message alone
     if (!messageAttached && currentMessage) {
+      if (!connected) {
+        toast.info('Message queued — will send automatically once connected', { duration: 3000 });
+      }
       onSendMessage(currentMessage);
     }
 
     setIsUploading(false);
     setUploadStatusText(null);
-  }, [message, selectedFiles, compressImages, onSendMessage, onUploadFile]);
+  }, [message, selectedFiles, compressImages, connected, onSendMessage, onUploadFile]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -572,7 +575,7 @@ export function ChatInput({
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder="Type a message..."
+              placeholder={!connected ? "Type a message... (will send once connected)" : "Type a message..."}
               className="min-h-[40px] max-h-[120px] resize-none py-2 px-3 border-0 focus-visible:ring-0 shadow-none text-sm leading-snug"
               disabled={disabled || isUploading || isRecording}
               rows={1}

@@ -5,14 +5,12 @@ import { ChatInput } from './ChatInput';
 import { RoomManager } from '../rooms/RoomManager';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import {
-  WifiOff,
   Users,
   Clock,
   MessageSquare
 } from 'lucide-react';
 import { getTimeRemaining } from '@/lib/utils';
 import { FileDropOverlay } from './FileDropOverlay';
-import { ArkLoader } from '@/components/ui/ArkLoader';
 
 export function ChatContainer() {
   const {
@@ -100,30 +98,20 @@ export function ChatContainer() {
     scrollToBottom();
   }, [messages, currentUser]);
 
-  // Connection status overlay
-  if (connecting) {
-    return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        <ArkLoader
-          size="lg"
-          label="Connecting to AQchat"
-          sublabel="Establishing secure encrypted connection"
-        />
-      </div>
-    );
-  }
+  // Non-blocking timer for connection elapsed time
+  const [connectingTimer, setConnectingTimer] = useState(0);
 
-  if (!connected) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <WifiOff className="w-12 h-12 mx-auto mb-4 text-destructive" />
-          <p className="text-lg font-medium">Connection Lost</p>
-          <p className="text-sm text-muted-foreground">Attempting to reconnect...</p>
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    let interval: any;
+    if (connecting || !connected) {
+      interval = setInterval(() => {
+        setConnectingTimer(prev => prev + 1);
+      }, 1000);
+    } else {
+      setConnectingTimer(0);
+    }
+    return () => clearInterval(interval);
+  }, [connecting, connected]);
 
   return (
     <div
@@ -155,6 +143,39 @@ export function ChatContainer() {
         onLeaveRoom={leaveRoom}
         unreadCounts={unreadCounts}
       />
+
+      {/* Non-intrusive Connection / Server Wakeup Status Banner */}
+      {(!connected || connecting) && (
+        <div className="bg-amber-500/10 dark:bg-amber-500/15 border-b border-amber-500/25 px-4 py-2 flex items-center justify-between text-xs z-10 animate-in fade-in slide-in-from-top-1 duration-200">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-4 h-4 flex items-center justify-center text-amber-500 shrink-0">
+              <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+            </div>
+            <div className="min-w-0 truncate">
+              <span className="font-semibold text-amber-600 dark:text-amber-400">
+                {connectingTimer > 4
+                  ? 'Waking up cloud server from sleep...'
+                  : connecting
+                  ? 'Connecting to AQchat network...'
+                  : 'Reconnecting to network in background...'}
+              </span>
+              <span className="text-muted-foreground ml-2 hidden sm:inline">
+                {connectingTimer > 4
+                  ? 'Usually takes ~20s on first load (free tier). You can type now; messages send when connected.'
+                  : 'Establishing secure encrypted connection.'}
+              </span>
+            </div>
+          </div>
+          {connectingTimer > 4 && (
+            <span className="text-[11px] font-mono text-amber-600/90 dark:text-amber-400/90 bg-amber-500/15 px-2 py-0.5 rounded border border-amber-500/30 shrink-0 ml-2">
+              {connectingTimer}s
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Chat Header - Hidden on mobile to save space, visible on large screens */}
       <div className="hidden sm:flex px-4 py-2 border-b items-center justify-between bg-background/50">
@@ -236,7 +257,7 @@ export function ChatContainer() {
         onSendMessage={sendMessage}
         onUploadFile={uploadFile}
         uploadProgress={uploadProgress}
-        disabled={!connected}
+        disabled={false}
         droppedFiles={droppedFiles}
         onClearDroppedFiles={() => setDroppedFiles(null)}
       />

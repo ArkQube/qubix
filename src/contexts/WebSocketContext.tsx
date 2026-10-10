@@ -535,6 +535,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     const wsUrl = DEFAULT_CONFIG.wsUrl;
     console.log('Connecting to WebSocket:', wsUrl, isSuppressed ? '(suppressed)' : '');
 
+    // Immediate HTTP wake-up ping to boot sleeping Render container
+    try {
+      fetch(`${DEFAULT_CONFIG.apiUrl}/ping`, { mode: 'cors' }).catch(() => {});
+    } catch {}
+
     try {
       ws.current = new WebSocket(wsUrl);
 
@@ -597,7 +602,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
             reconnectTimeout.current = setTimeout(() => {
               reconnectTimeout.current = null;
               connect();
-            }, 3000);
+            }, 1500);
           }
         }
       };

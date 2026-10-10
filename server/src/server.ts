@@ -1713,18 +1713,32 @@ cron.schedule('*/10 * * * *', async () => {
     }
 
     // Ping Render edge node to keep free tier awake
-    await axios.get('https://qubix-rr27.onrender.com/api/info');
+    try {
+      await axios.get('https://qubix-rr27.onrender.com/api/info', { timeout: 10000 });
+    } catch {}
     console.log('[CRON] Cleaned Redis queues, audited storage, and pinged self successfully.');
   } catch (err: any) {
     console.error('[CRON] Task failed:', err.message);
   }
 });
 
+// ── Dedicated Render Free-Tier Keep-Alive Self-Ping (every 5 minutes) ────────
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://qubix-rr27.onrender.com';
+setInterval(async () => {
+  try {
+    await axios.get(`${RENDER_EXTERNAL_URL}/ping`, { timeout: 10000 });
+    console.log('[KEEPALIVE] Server self-ping succeeded to prevent Render free-tier sleep.');
+  } catch (err: any) {
+    console.warn('[KEEPALIVE] Self-ping notice:', err.message);
+  }
+}, 5 * 60 * 1000);
+
 // Start server
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Arkion Server running on port ${PORT}`);
   console.log(`WebSocket server ready at /ws`);
+  axios.get(`${RENDER_EXTERNAL_URL}/ping`, { timeout: 10000 }).catch(() => {});
 });
 
 // Graceful shutdown
